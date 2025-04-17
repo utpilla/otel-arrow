@@ -14,7 +14,6 @@
 
 // Re-export derive macros (required for generated code)
 pub use otlp_derive::qualified;
-pub use otlp_derive::Message;
 
 // Include tests
 #[cfg(test)]

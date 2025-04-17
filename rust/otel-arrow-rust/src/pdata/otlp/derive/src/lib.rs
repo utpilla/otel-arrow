@@ -18,63 +18,16 @@ use syn::{parse_macro_input, DeriveInput};
 /// qualified type name.
 #[proc_macro_attribute]
 pub fn qualified(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args_str: String = args.to_string().trim_matches('"').into();
-
-    // Parse input and add the qualified attribute in a more functional way
-    let input_ast = syn::parse_macro_input!(input as syn::DeriveInput)
-        .into_token_stream()
-        .to_string();
-
-    // Create a special doc comment that will store the qualified name
-    let qualified_attr = syn::parse_quote! {
-        #[doc(hidden, otlp_qualified_name = #args_str)]
-    };
-
-    // Parse again and add the attribute
-    let mut final_ast = syn::parse_str::<DeriveInput>(&input_ast).unwrap();
-    final_ast.attrs.push(qualified_attr);
-
-    // Return the modified struct definition
-    quote::quote!(#final_ast).into()
+    let type_name: String = args.to_string().trim_matches('"').into();
+    add_constructor_and_builder_methods(type_name, input)
 }
 
-/// Derives the OTLP Message trait implementation for protocol buffer
-/// message types. This enables additional OTLP-specific functionality
-/// beyond what prost::Message provides.
-#[proc_macro_derive(Message)]
-pub fn derive_otlp_message(input: TokenStream) -> TokenStream {
+fn add_constructor_and_builder_methods(type_name: String, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let outer_name = &input.ident;
     let builder_name = syn::Ident::new(&format!("{}Builder", outer_name), outer_name.span());
 
     type TokenVec = Vec<proc_macro2::TokenStream>;
-
-    // Get the fully qualified type name from attribute
-    let type_name = input
-        .attrs
-        .iter()
-        .find_map(|attr| {
-            if attr.path().is_ident("doc") {
-                // Use parse_nested_meta to extract the qualified name
-                let mut qualified_name = None;
-                let _ = attr.parse_nested_meta(|meta| {
-                    if meta.path.is_ident("hidden") {
-                        Ok(())
-                    } else if meta.path.is_ident("otlp_qualified_name") {
-                        let value = meta.value()?;
-                        let lit: syn::LitStr = value.parse()?;
-                        qualified_name = Some(lit.value());
-                        Ok(())
-                    } else {
-                        Ok(())
-                    }
-                });
-                qualified_name
-            } else {
-                None
-            }
-        })
-        .unwrap();
 
     // Get required parameters for this type.
     let param_names = otlp_model::REQUIRED_PARAMS.get(type_name.as_str()).unwrap();
