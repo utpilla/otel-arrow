@@ -200,8 +200,11 @@ impl LogsRecordBatchBuilder {
 
     /// construct an OTAP Logs record batch from the array builders
     pub fn finish(&mut self) -> Result<RecordBatch, ArrowError> {
-        let mut fields = vec![];
-        let mut columns = vec![];
+        // Pre-allocate with maximum possible capacity (13 fields):
+        // id, resource, scope, schema_url, time_unix_nano, observed_time_unix_nano,
+        // trace_id, span_id, severity_number, severity_text, body, dropped_attributes_count, flags
+        let mut fields = Vec::with_capacity(13);
+        let mut columns = Vec::with_capacity(13);
 
         if let Some(array) = self.id.finish() {
             fields.push(Field::new(consts::ID, array.data_type().clone(), true));
@@ -475,8 +478,10 @@ impl LogsBodyBuilder {
             }
         }
 
-        let mut fields = vec![];
-        let mut columns = vec![];
+        // Pre-allocate with actual capacity (2 fields):
+        // value_type + exactly one of: string_value, int_value, double_value, bool_value, bytes_value, ser_value
+        let mut fields = Vec::with_capacity(2);
+        let mut columns = Vec::with_capacity(2);
 
         if let Some(array) = self.value_type.finish() {
             fields.push(Field::new(
@@ -607,8 +612,10 @@ impl ResourceBuilder {
 
     /// Finish this builder and build the resulting `StructArray` for the resource
     pub fn finish(&mut self) -> Result<StructArray, ArrowError> {
-        let mut fields = vec![];
-        let mut columns = vec![];
+        // Pre-allocate with maximum possible capacity (3 fields):
+        // id, schema_url, dropped_attributes_count
+        let mut fields = Vec::with_capacity(3);
+        let mut columns = Vec::with_capacity(3);
 
         if let Some(array) = self.id.finish() {
             fields.push(Field::new(consts::ID, array.data_type().clone(), true));
@@ -713,8 +720,10 @@ impl ScopeBuilder {
 
     /// Finish this builder and build the resulting `StructArray` for the scope
     pub fn finish(&mut self) -> Result<StructArray, ArrowError> {
-        let mut fields = vec![];
-        let mut columns = vec![];
+        // Pre-allocate with maximum possible capacity (4 fields):
+        // id, name, version, dropped_attributes_count
+        let mut fields = Vec::with_capacity(4);
+        let mut columns = Vec::with_capacity(4);
 
         if let Some(array) = self.id.finish() {
             fields.push(Field::new(consts::ID, array.data_type().clone(), true));

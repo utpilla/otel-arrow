@@ -200,8 +200,10 @@ where
 
     /// Finish this builder and produce the resulting RecordBatch
     pub fn finish(&mut self) -> Result<RecordBatch, ArrowError> {
-        let mut columns = vec![];
-        let mut fields = vec![];
+        // Pre-allocate with actual capacity (4 fields):
+        // parent_id, keys, value_type + exactly one of: string_value, int_value, double_value, bool_value, bytes_value, ser_value
+        let mut columns = Vec::with_capacity(4);
+        let mut fields = Vec::with_capacity(4);
 
         if let Some(array) = self.parent_id.finish() {
             fields.push(Field::new(

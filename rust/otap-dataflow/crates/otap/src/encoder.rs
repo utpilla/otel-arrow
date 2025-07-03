@@ -35,6 +35,9 @@ where
     let mut logs = LogsRecordBatchBuilder::new();
     let mut log_attrs = AttributesRecordBatchBuilder::<u16>::new();
 
+    // Reusable buffer for CBOR serialization to avoid repeated allocations
+    let mut cbor_buffer = Vec::new();
+
     for (curr_resource_id, resource_logs) in logs_view.resources().enumerate() {
         let curr_resource_id = curr_resource_id as u16;
 
@@ -43,7 +46,7 @@ where
             // append resource attributes
             for kv in resource.attributes() {
                 resource_attrs.append_parent_id(&curr_resource_id);
-                append_attribute_value(&mut resource_attrs, &kv)?;
+                append_attribute_value(&mut resource_attrs, &kv, &mut cbor_buffer)?;
             }
             resource.dropped_attributes_count()
         } else {
@@ -57,11 +60,11 @@ where
 
             let (scope_name, scope_version, scope_dropped_attributes_count) =
                 if let Some(scope) = scope.as_ref() {
-                    // since there is an instrumentations scope present, append the attributes
-                    for kv in scope.attributes() {
-                        scope_attrs.append_parent_id(&curr_scope_id);
-                        append_attribute_value(&mut scope_attrs, &kv)?;
-                    }
+                // since there is an instrumentations scope present, append the attributes
+                for kv in scope.attributes() {
+                    scope_attrs.append_parent_id(&curr_scope_id);
+                    append_attribute_value(&mut scope_attrs, &kv, &mut cbor_buffer)?;
+                }
 
                     // keep track of scope fields, which will be appended to log later on
                     (
@@ -124,21 +127,21 @@ where
                                 .append_bytes(body.as_bytes().expect("body to be bytes"));
                         }
                         ValueType::Array => {
-                            let mut serialized_value = vec![];
+                            cbor_buffer.clear();
                             cbor::serialize_any_values(
                                 body.as_array().expect("body to be array"),
-                                &mut serialized_value,
+                                &mut cbor_buffer,
                             )?;
-                            logs.body.append_slice(&serialized_value);
+                            logs.body.append_slice(&cbor_buffer);
                         }
 
                         ValueType::KeyValueList => {
-                            let mut serialized_value = vec![];
+                            cbor_buffer.clear();
                             cbor::serialize_kv_list(
                                 body.as_kvlist().expect("body to be kvlist"),
-                                &mut serialized_value,
+                                &mut cbor_buffer,
                             )?;
-                            logs.body.append_map(&serialized_value);
+                            logs.body.append_map(&cbor_buffer);
                         }
                         ValueType::Empty => {
                             logs.body.append_null();
@@ -152,7 +155,7 @@ where
                 for kv in log_record.attributes() {
                     log_attrs.append_parent_id(&curr_log_id);
                     log_attrs_count += 1;
-                    append_attribute_value(&mut log_attrs, &kv)?;
+                    append_attribute_value(&mut log_attrs, &kv, &mut cbor_buffer)?;
                 }
 
                 if log_attrs_count > 0 {
@@ -193,6 +196,7 @@ where
 fn append_attribute_value<T, KV>(
     attribute_rb_builder: &mut AttributesRecordBatchBuilder<T>,
     kv: &KV,
+    cbor_buffer: &mut Vec<u8>,
 ) -> Result<()>
 where
     T: ParentId + AttributesRecordBatchBuilderConstructorHelper,
@@ -219,20 +223,20 @@ where
                 attribute_rb_builder.append_bytes(val.as_bytes().expect("value to be bytes"))
             }
             ValueType::Array => {
-                let mut serialized_values = vec![];
+                cbor_buffer.clear();
                 cbor::serialize_any_values(
                     val.as_array().expect("value to be array"),
-                    &mut serialized_values,
+                    &mut *cbor_buffer,
                 )?;
-                attribute_rb_builder.append_slice(&serialized_values)
+                attribute_rb_builder.append_slice(&cbor_buffer)
             }
             ValueType::KeyValueList => {
-                let mut serialized_value = vec![];
+                cbor_buffer.clear();
                 cbor::serialize_kv_list(
                     val.as_kvlist().expect("value is kvlist"),
-                    &mut serialized_value,
+                    &mut *cbor_buffer,
                 )?;
-                attribute_rb_builder.append_map(&serialized_value);
+                attribute_rb_builder.append_map(&cbor_buffer);
             }
             ValueType::Empty => {
                 attribute_rb_builder.append_empty();
