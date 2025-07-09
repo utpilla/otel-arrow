@@ -21,8 +21,12 @@ pub(crate) fn parse_scalar_expression(
         Rule::true_literal | Rule::false_literal => {
             ScalarExpression::Static(parse_standard_bool_literal(scalar_rule))
         }
-        Rule::double_literal => ScalarExpression::Static(parse_double_literal(scalar_rule)?),
-        Rule::integer_literal => ScalarExpression::Static(parse_integer_literal(scalar_rule)?),
+        Rule::double_literal => {
+            ScalarExpression::Static(parse_standard_double_literal(scalar_rule, None)?)
+        }
+        Rule::integer_literal => {
+            ScalarExpression::Static(parse_standard_integer_literal(scalar_rule)?)
+        }
         Rule::string_literal => ScalarExpression::Static(parse_string_literal(scalar_rule)),
         Rule::accessor_expression => {
             // Note: When used as a scalar expression it is valid for an
@@ -54,13 +58,13 @@ pub(crate) fn parse_scalar_expression(
 mod tests {
     use pest::Parser;
 
-    use crate::{KqlParser, date_utils::create_utc};
+    use crate::{KqlPestParser, date_utils::create_utc};
 
     use super::*;
 
     #[test]
     fn test_pest_parse_scalar_expression_rule() {
-        pest_test_helpers::test_pest_rule::<KqlParser, Rule>(
+        pest_test_helpers::test_pest_rule::<KqlPestParser, Rule>(
             Rule::scalar_expression,
             &[
                 "1",
@@ -84,7 +88,7 @@ mod tests {
         let run_test_success = |input: &str, expected: ScalarExpression| {
             let state = ParserState::new(input);
 
-            let mut result = KqlParser::parse(Rule::scalar_expression, input).unwrap();
+            let mut result = KqlPestParser::parse(Rule::scalar_expression, input).unwrap();
 
             let expression = parse_scalar_expression(result.next().unwrap(), &state).unwrap();
 
