@@ -12,9 +12,10 @@
 //! # Token Refresh
 //!
 //! The extension's [`start`](Extension::start) loop proactively refreshes
-//! the token before it expires.  Consumers call
+//! the token before it expires and broadcasts updates via a
+//! [`tokio::sync::watch`] channel.  Consumers call
 //! [`ClientAuthenticatorHandle::get_request_metadata`] to pull the latest
-//! cached header — no push/update plumbing is required.
+//! cached header — the watch channel ensures efficient, lock-free reads.
 //!
 //! # Example YAML Configuration
 //!
@@ -48,7 +49,8 @@ use otap_df_engine::node::NodeId;
 use otap_df_telemetry::{otel_debug, otel_error, otel_info, otel_warn};
 use http::header::HeaderValue;
 use serde::Deserialize;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::watch;
 
 use otap_df_otap::OTAP_EXTENSION_FACTORIES;
 
@@ -111,22 +113,19 @@ fn default_scope() -> String {
 
 /// A [`ClientAuthenticator`] backed by a cached Azure AD bearer token.
 ///
-/// The extension's background loop refreshes the token and stores it in the
-/// shared `Arc<Mutex<…>>`.  Consumers (exporters, heartbeat clients, etc.)
-/// read the latest cached header on every call to [`get_request_metadata`].
+/// The extension's background loop refreshes the token and broadcasts it via
+/// a [`tokio::sync::watch`] channel.  Consumers (exporters, heartbeat
+/// clients, etc.) read the latest cached header on every call to
+/// [`get_request_metadata`] using the watch receiver's lock-free borrow.
 struct AzureIdentityClientAuth {
-    cached_header: Arc<Mutex<Option<HeaderValue>>>,
+    token_rx: watch::Receiver<Option<HeaderValue>>,
 }
 
 impl ClientAuthenticator for AzureIdentityClientAuth {
     fn get_request_metadata(
         &self,
     ) -> Result<Vec<(http::HeaderName, HeaderValue)>, AuthError> {
-        let header = self
-            .cached_header
-            .lock()
-            .expect("cached_header lock poisoned")
-            .clone();
+        let header = self.token_rx.borrow().clone();
         match header {
             Some(h) => Ok(vec![(http::header::AUTHORIZATION, h)]),
             None => Err(AuthError {
@@ -141,12 +140,13 @@ impl ClientAuthenticator for AzureIdentityClientAuth {
 /// The Azure Identity Auth extension.
 ///
 /// Runs a background loop that proactively refreshes an Azure AD access token
-/// and stores the formatted `Authorization: Bearer <token>` header value for
-/// consumers to pull via [`ClientAuthenticatorHandle::get_request_metadata`].
+/// and broadcasts the formatted `Authorization: Bearer <token>` header value
+/// via a [`tokio::sync::watch`] channel for consumers to pull via
+/// [`ClientAuthenticatorHandle::get_request_metadata`].
 struct AzureIdentityAuthExtension {
     credential: Arc<dyn TokenCredential>,
     scope: String,
-    cached_header: Arc<Mutex<Option<HeaderValue>>>,
+    token_tx: watch::Sender<Option<HeaderValue>>,
 }
 
 impl AzureIdentityAuthExtension {
@@ -261,10 +261,7 @@ impl local::Extension for AzureIdentityAuthExtension {
                                 &format!("Bearer {}", access_token.token.secret()),
                             ) {
                                 Ok(header) => {
-                                    *self
-                                        .cached_header
-                                        .lock()
-                                        .expect("cached_header lock poisoned") = Some(header);
+                                    let _ = self.token_tx.send_replace(Some(header));
 
                                     next_token_refresh = get_next_token_refresh(&access_token);
 
@@ -382,13 +379,12 @@ pub static AZURE_IDENTITY_AUTH_EXTENSION: ExtensionFactory = ExtensionFactory {
         // Create the Azure credential
         let credential = create_credential(&cfg)?;
 
-        // Shared state: the cached Authorization header
-        let cached_header: Arc<Mutex<Option<HeaderValue>>> = Arc::new(Mutex::new(None));
+        // Create watch channel: extension broadcasts token updates,
+        // authenticator reads the latest value via the receiver.
+        let (token_tx, token_rx) = watch::channel(None);
 
         // Build the ClientAuthenticator handle for consumers
-        let auth = AzureIdentityClientAuth {
-            cached_header: cached_header.clone(),
-        };
+        let auth = AzureIdentityClientAuth { token_rx };
         let mut handles = ExtensionHandles::new();
         handles.register(ClientAuthenticatorHandle::new(auth));
 
@@ -396,7 +392,7 @@ pub static AZURE_IDENTITY_AUTH_EXTENSION: ExtensionFactory = ExtensionFactory {
         let extension = AzureIdentityAuthExtension {
             credential,
             scope: cfg.scope,
-            cached_header,
+            token_tx,
         };
 
         Ok(ExtensionWrapper::local(
@@ -462,10 +458,8 @@ mod tests {
 
     #[test]
     fn test_client_auth_returns_none_before_refresh() {
-        let cached = Arc::new(Mutex::new(None));
-        let auth = AzureIdentityClientAuth {
-            cached_header: cached,
-        };
+        let (_tx, rx) = watch::channel(None);
+        let auth = AzureIdentityClientAuth { token_rx: rx };
 
         let err = auth.get_request_metadata().unwrap_err();
         assert!(err.message.contains("not yet available"));
@@ -473,12 +467,10 @@ mod tests {
 
     #[test]
     fn test_client_auth_returns_cached_header() {
-        let cached = Arc::new(Mutex::new(Some(
+        let (_tx, rx) = watch::channel(Some(
             HeaderValue::from_static("Bearer test-token"),
-        )));
-        let auth = AzureIdentityClientAuth {
-            cached_header: cached,
-        };
+        ));
+        let auth = AzureIdentityClientAuth { token_rx: rx };
 
         let metadata = auth.get_request_metadata().unwrap();
         assert_eq!(metadata.len(), 1);
@@ -488,18 +480,16 @@ mod tests {
 
     #[test]
     fn test_client_auth_sees_updates() {
-        let cached: Arc<Mutex<Option<HeaderValue>>> = Arc::new(Mutex::new(None));
-        let auth = AzureIdentityClientAuth {
-            cached_header: cached.clone(),
-        };
+        let (tx, rx) = watch::channel(None);
+        let auth = AzureIdentityClientAuth { token_rx: rx };
 
         assert!(auth.get_request_metadata().is_err());
 
-        *cached.lock().unwrap() = Some(HeaderValue::from_static("Bearer v1"));
+        let _ = tx.send_replace(Some(HeaderValue::from_static("Bearer v1")));
         let meta = auth.get_request_metadata().unwrap();
         assert_eq!(meta[0].1, "Bearer v1");
 
-        *cached.lock().unwrap() = Some(HeaderValue::from_static("Bearer v2"));
+        let _ = tx.send_replace(Some(HeaderValue::from_static("Bearer v2")));
         let meta = auth.get_request_metadata().unwrap();
         assert_eq!(meta[0].1, "Bearer v2");
     }
@@ -552,12 +542,12 @@ mod tests {
         let (credential, call_count) =
             mock_credential("my-azure-token", azure_core::time::Duration::seconds(3600));
 
-        let cached_header: Arc<Mutex<Option<HeaderValue>>> = Arc::new(Mutex::new(None));
+        let (token_tx, token_rx) = watch::channel(None);
 
         let extension = AzureIdentityAuthExtension {
             credential,
             scope: "https://monitor.azure.com/.default".to_string(),
-            cached_header: cached_header.clone(),
+            token_tx,
         };
 
         let config = ExtensionConfig::new("test_azure_auth");
@@ -586,8 +576,8 @@ mod tests {
                 // Verify token was acquired
                 assert!(call_count.load(Ordering::SeqCst) >= 1);
 
-                // Verify cached header is set
-                let header = cached_header.lock().unwrap().clone();
+                // Verify token is broadcast via watch channel
+                let header = token_rx.borrow().clone();
                 assert!(header.is_some());
                 assert_eq!(header.unwrap(), "Bearer my-azure-token");
 
