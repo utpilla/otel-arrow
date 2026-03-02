@@ -25,6 +25,23 @@ groups:
     pipelines:
       main:
         nodes:
+          # Extension node: provides Azure AD authentication for exporters.
+          azure-auth:
+            type: "urn:microsoft:extension:azure_identity_auth"
+            config:
+              # Use managed identity for AKS workloads
+              method: "managedidentity"  # or "msi"
+
+              # For user-assigned managed identity (common in AKS)
+              # Get this from your AKS managed identity configuration
+              client_id: "YOUR-USER-ASSIGNED-IDENTITY-CLIENT-ID"
+
+              # For system-assigned managed identity (less common in AKS)
+              # Comment out the client_id field above
+
+              # OAuth scope for Azure Monitor
+              scope: "https://monitor.azure.com/.default"
+
           otlp-receiver:
             type: "urn:otel:receiver:otlp"
             config:
@@ -70,20 +87,9 @@ groups:
                       "exception.message": "ExceptionMessage"
                       "user.id": "UserId"
 
-              # Authentication configuration for AKS
+              # Reference to the auth extension declared above
               auth:
-                # Use managed identity for AKS workloads
-                method: "managedidentity"  # or "msi"
-
-                # For user-assigned managed identity (common in AKS)
-                # Get this from your AKS managed identity configuration
-                client_id: "YOUR-USER-ASSIGNED-IDENTITY-CLIENT-ID"
-
-                # For system-assigned managed identity (less common in AKS)
-                # Comment out the client_id field above
-
-                # OAuth scope for Azure Monitor
-                scope: "https://monitor.azure.com/.default"
+                authenticator: "azure-auth"
 
         connections:
           - from: otlp-receiver

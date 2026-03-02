@@ -1,0 +1,47 @@
+# OTLP Receiver with Bearer Token Auth Extension
+#
+# This configuration demonstrates server-side authentication using the
+# bearer_token_auth extension. The extension validates that incoming
+# gRPC requests carry an `Authorization: Bearer <token>` header matching
+# the configured static token; requests without a valid token are rejected
+# with gRPC UNAUTHENTICATED status.
+
+version: otel_dataflow/v1
+engine: { }
+
+groups:
+  default:
+    pipelines:
+      main:
+        policies:
+          channel_capacity:
+            control:
+              node: 100
+              pipeline: 100
+            pdata: 128
+
+        nodes:
+          # Extension node: provides server-side auth for receivers.
+          # Extensions are regular nodes identified by their URN prefix.
+          # They are started before pipeline components and stopped after.
+          bearer_auth:
+            type: "urn:otel:extension:bearer_token_auth"
+            config:
+              token: "my-secret-token"
+
+          receiver:
+            type: receiver:otlp
+            config:
+              # Reference the auth extension by its node name.
+              # The standardized `auth.authenticator` field mirrors the
+              # Go Collector's configauth.Authentication pattern.
+              auth:
+                authenticator: "bearer_auth"
+              protocols:
+                grpc:
+                  listening_addr: "127.0.0.1:4317"
+
+          exporter:
+            type: exporter:debug
+            config:
+              verbosity: basic
