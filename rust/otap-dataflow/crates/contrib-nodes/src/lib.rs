@@ -3,6 +3,9 @@
 
 //! Implementation of the Contrib nodes (receiver, exporter, processor).
 
+/// Extension implementations for contrib nodes.
+pub mod extensions;
+
 /// Exporter implementations for contrib nodes.
 pub mod exporters;
 

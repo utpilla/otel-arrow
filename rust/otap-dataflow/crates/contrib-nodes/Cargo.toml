@@ -50,6 +50,20 @@ reqwest = { workspace = true, optional = true, features = ["rustls"] }
 sysinfo = { workspace = true, optional = true }
 
 [features]
+contrib-extensions = [
+    "azure-identity-auth-extension",
+    "bearer-token-auth-extension",
+]
+azure-identity-auth-extension = [
+    "dep:azure_identity",
+    "dep:azure_core",
+    "dep:http",
+    "dep:rand",
+]
+bearer-token-auth-extension = [
+    "dep:http",
+]
+
 contrib-exporters = [
     "geneva-exporter",
     "azure-monitor-exporter",
@@ -60,9 +74,7 @@ geneva-exporter = [
 ]
 azure-monitor-exporter = [
     "dep:opentelemetry-proto",
-    "dep:azure_identity",
     "dep:reqwest",
-    "dep:azure_core",
     "dep:ahash",
     "dep:sysinfo",
     "dep:chrono",

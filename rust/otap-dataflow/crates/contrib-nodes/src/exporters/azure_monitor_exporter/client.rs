@@ -3,11 +3,12 @@
 
 use bytes::Bytes;
 
+use otap_df_engine::extensions::auth::ClientAuthenticatorHandle;
 use otap_df_telemetry::otel_warn;
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use reqwest::{
     Client,
-    header::{AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE, HeaderValue},
+    header::{CONTENT_ENCODING, CONTENT_TYPE},
 };
 use tokio::time::{Duration, Instant};
 
@@ -29,8 +30,8 @@ pub struct LogsIngestionClient {
     http_client: Client,
     endpoint: String,
 
-    // Pre-formatted authorization header provider
-    auth_header: HeaderValue,
+    /// Client authenticator handle provided by an auth extension.
+    auth: ClientAuthenticatorHandle,
 
     /// Shared metrics tracker for recording HTTP status codes and latency.
     metrics: AzureMonitorExporterMetricsRc,
@@ -68,21 +69,20 @@ impl LogsIngestionClientPool {
         Ok(clients)
     }
 
-    pub async fn initialize(&mut self, config: &ApiConfig) -> Result<(), Error> {
+    pub async fn initialize(
+        &mut self,
+        config: &ApiConfig,
+        auth: ClientAuthenticatorHandle,
+    ) -> Result<(), Error> {
         let http_clients = self.create_http_clients(self.clients.capacity())?;
 
         for http_client in http_clients {
-            let client = LogsIngestionClient::new(config, http_client, self.metrics.clone())?;
+            let client =
+                LogsIngestionClient::new(config, http_client, auth.clone(), self.metrics.clone())?;
             self.clients.push(client);
         }
 
         Ok(())
-    }
-
-    pub fn update_auth(&mut self, header: HeaderValue) {
-        for client in &mut self.clients {
-            client.update_auth(header.clone());
-        }
     }
 
     #[inline(always)]
@@ -99,37 +99,36 @@ impl LogsIngestionClientPool {
 impl LogsIngestionClient {
     /// Creates a new Azure Monitor logs ingestion client instance from provided components.
     ///
-    /// Primarily used for testing. The auth header is initialized with a placeholder
-    /// and should be updated via `update_auth()` before making requests.
+    /// Primarily used for testing.
     ///
     /// # Arguments
     /// * `http_client` - The HTTP client to use for requests
     /// * `endpoint` - The full endpoint URL for the Azure Monitor ingestion API
+    /// * `auth` - Client authenticator handle from an auth extension
     ///
     /// # Returns
-    /// A configured client instance with a placeholder auth header
+    /// A configured client instance
     #[must_use]
     pub fn from_parts(
         http_client: Client,
         endpoint: String,
+        auth: ClientAuthenticatorHandle,
         metrics: AzureMonitorExporterMetricsRc,
     ) -> Self {
         Self {
             http_client,
             endpoint,
-            auth_header: HeaderValue::from_static("Bearer "), // placeholder, will be updated on first use
+            auth,
             metrics,
         }
     }
 
     /// Creates a new Azure Monitor logs ingestion client instance from the configuration.
     ///
-    /// The auth header is initialized with a placeholder and should be updated
-    /// via `update_auth()` before making requests.
-    ///
     /// # Arguments
     /// * `config` - The API configuration containing endpoint, DCR, and stream info
     /// * `http_client` - The HTTP client to use for requests
+    /// * `auth` - Client authenticator handle from an auth extension
     ///
     /// # Returns
     /// * `Ok(LogsIngestionClient)` - A configured client instance
@@ -137,6 +136,7 @@ impl LogsIngestionClient {
     pub fn new(
         config: &ApiConfig,
         http_client: Client,
+        auth: ClientAuthenticatorHandle,
         metrics: AzureMonitorExporterMetricsRc,
     ) -> Result<Self, Error> {
         let endpoint = format!(
@@ -147,14 +147,9 @@ impl LogsIngestionClient {
         Ok(Self {
             http_client,
             endpoint,
-            auth_header: HeaderValue::from_static("Bearer "), // placeholder, will be updated on first use
+            auth,
             metrics,
         })
-    }
-
-    /// Update the authorization header with a new access token.
-    pub fn update_auth(&mut self, header: HeaderValue) {
-        self.auth_header = header;
     }
 
     /// Export compressed data to Log Analytics ingestion API with automatic retry.
@@ -223,16 +218,22 @@ impl LogsIngestionClient {
         let body_len = body.len();
         let start = Instant::now();
 
-        let response = self
+        let auth_headers = self
+            .auth
+            .get_request_metadata()
+            .map_err(|e| Error::ClientAuthUnavailable(e.to_string()))?;
+
+        let mut request = self
             .http_client
             .post(&self.endpoint)
             .header(CONTENT_TYPE, "application/json")
-            .header(CONTENT_ENCODING, "gzip")
-            .header(AUTHORIZATION, &self.auth_header)
-            .body(body)
-            .send()
-            .await
-            .map_err(Error::network)?;
+            .header(CONTENT_ENCODING, "gzip");
+
+        for (name, value) in auth_headers {
+            request = request.header(name, value);
+        }
+
+        let response = request.body(body).send().await.map_err(Error::network)?;
 
         let status_code = response.status().as_u16();
         let elapsed = start.elapsed();
@@ -288,11 +289,30 @@ mod tests {
     use super::super::metrics::AzureMonitorExporterMetrics;
     use super::super::metrics::AzureMonitorExporterMetricsTracker;
     use super::*;
+    use otap_df_engine::extensions::auth::{AuthError, ClientAuthenticator};
     use otap_df_telemetry::registry::TelemetryRegistryHandle;
     use otap_df_telemetry::testing::EmptyAttributes;
-    use reqwest::header::HeaderValue;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    // ==================== Test Auth Helper ====================
+
+    struct TestAuth;
+
+    impl ClientAuthenticator for TestAuth {
+        fn get_request_metadata(
+            &self,
+        ) -> Result<Vec<(http::HeaderName, http::HeaderValue)>, AuthError> {
+            Ok(vec![(
+                http::header::AUTHORIZATION,
+                http::HeaderValue::from_static("Bearer test_token"),
+            )])
+        }
+    }
+
+    fn create_test_auth() -> ClientAuthenticatorHandle {
+        ClientAuthenticatorHandle::new(TestAuth)
+    }
 
     // ==================== Test Helpers ====================
 
@@ -334,8 +354,13 @@ mod tests {
 
         let http_client = create_test_http_client();
 
-        let client = LogsIngestionClient::new(&api_config, http_client, create_test_metrics())
-            .expect("failed to create client");
+        let client = LogsIngestionClient::new(
+            &api_config,
+            http_client,
+            create_test_auth(),
+            create_test_metrics(),
+        )
+        .expect("failed to create client");
 
         assert_eq!(
             client.endpoint,
@@ -355,7 +380,8 @@ mod tests {
         let http_client = create_test_http_client();
 
         let client =
-            LogsIngestionClient::new(&api_config, http_client, create_test_metrics()).unwrap();
+            LogsIngestionClient::new(&api_config, http_client, create_test_auth(), create_test_metrics())
+                .unwrap();
 
         assert!(client.endpoint.contains("dcr-abc-123-def"));
         assert!(client.endpoint.contains("Custom-Stream_Name"));
@@ -366,12 +392,11 @@ mod tests {
         let client = LogsIngestionClient::from_parts(
             create_test_http_client(),
             "https://example.com/endpoint".to_string(),
+            create_test_auth(),
             create_test_metrics(),
         );
 
         assert_eq!(client.endpoint, "https://example.com/endpoint");
-        // auth_header is placeholder
-        assert_eq!(client.auth_header, HeaderValue::from_static("Bearer "));
     }
 
     #[test]
@@ -379,58 +404,16 @@ mod tests {
         let http_client = create_test_http_client();
         let api_config = create_test_api_config();
 
-        let client =
-            LogsIngestionClient::new(&api_config, http_client, create_test_metrics()).unwrap();
-
-        // Auth header is placeholder
-        assert_eq!(client.auth_header, HeaderValue::from_static("Bearer "));
-    }
-
-    // ==================== Auth Header Update Tests ====================
-
-    #[test]
-    fn test_update_auth_changes_header() {
-        let mut client = LogsIngestionClient::from_parts(
-            create_test_http_client(),
-            "https://example.com".to_string(),
+        let client = LogsIngestionClient::new(
+            &api_config,
+            http_client,
+            create_test_auth(),
             create_test_metrics(),
-        );
+        )
+        .unwrap();
 
-        assert_eq!(client.auth_header, HeaderValue::from_static("Bearer "));
-
-        client.update_auth(HeaderValue::from_static("Bearer new_token"));
-
-        assert_eq!(
-            client.auth_header,
-            HeaderValue::from_static("Bearer new_token")
-        );
-    }
-
-    #[test]
-    fn test_update_auth_multiple_times() {
-        let mut client = LogsIngestionClient::from_parts(
-            create_test_http_client(),
-            "https://example.com".to_string(),
-            create_test_metrics(),
-        );
-
-        client.update_auth(HeaderValue::from_static("Bearer token1"));
-        assert_eq!(
-            client.auth_header,
-            HeaderValue::from_static("Bearer token1")
-        );
-
-        client.update_auth(HeaderValue::from_static("Bearer token2"));
-        assert_eq!(
-            client.auth_header,
-            HeaderValue::from_static("Bearer token2")
-        );
-
-        client.update_auth(HeaderValue::from_static("Bearer token3"));
-        assert_eq!(
-            client.auth_header,
-            HeaderValue::from_static("Bearer token3")
-        );
+        // Endpoint is correctly formatted
+        assert!(client.endpoint.contains("test-dcr"));
     }
 
     // ==================== LogsIngestionClientPool Tests ====================
@@ -459,6 +442,7 @@ mod tests {
         let client = LogsIngestionClient::new(
             &api_config,
             create_test_http_client(),
+            create_test_auth(),
             create_test_metrics(),
         )
         .unwrap();
@@ -482,6 +466,7 @@ mod tests {
             let client = LogsIngestionClient::new(
                 &api_config,
                 create_test_http_client(),
+                create_test_auth(),
                 create_test_metrics(),
             )
             .unwrap();
@@ -514,6 +499,7 @@ mod tests {
             let client = LogsIngestionClient::new(
                 &api_config,
                 create_test_http_client(),
+                create_test_auth(),
                 create_test_metrics(),
             )
             .unwrap();
@@ -530,51 +516,13 @@ mod tests {
         let client1 = LogsIngestionClient::from_parts(
             create_test_http_client(),
             "https://example.com/endpoint".to_string(),
+            create_test_auth(),
             create_test_metrics(),
         );
 
         let client2 = client1.clone();
 
         assert_eq!(client1.endpoint, client2.endpoint);
-    }
-
-    #[test]
-    fn test_client_clone_has_same_auth_header() {
-        let mut client1 = LogsIngestionClient::from_parts(
-            create_test_http_client(),
-            "https://example.com".to_string(),
-            create_test_metrics(),
-        );
-
-        client1.update_auth(HeaderValue::from_static("Bearer test_token"));
-        let client2 = client1.clone();
-
-        assert_eq!(client1.auth_header, client2.auth_header);
-    }
-
-    #[test]
-    fn test_client_clone_has_independent_header() {
-        let mut client1 = LogsIngestionClient::from_parts(
-            create_test_http_client(),
-            "https://example.com".to_string(),
-            create_test_metrics(),
-        );
-
-        client1.update_auth(HeaderValue::from_static("Bearer token1"));
-        let mut client2 = client1.clone();
-
-        // Modify client2's header
-        client2.update_auth(HeaderValue::from_static("Bearer token2"));
-
-        // client1's header should be unchanged
-        assert_eq!(
-            client1.auth_header,
-            HeaderValue::from_static("Bearer token1")
-        );
-        assert_eq!(
-            client2.auth_header,
-            HeaderValue::from_static("Bearer token2")
-        );
     }
 
     // ==================== Edge Cases ====================
@@ -584,6 +532,7 @@ mod tests {
         let client = LogsIngestionClient::from_parts(
             create_test_http_client(),
             "".to_string(),
+            create_test_auth(),
             create_test_metrics(),
         );
 

@@ -126,6 +126,17 @@ mod tests {
     }
 
     fn create_test_client() -> LogsIngestionClient {
+        use otap_df_engine::extensions::auth::{AuthError, ClientAuthenticator, ClientAuthenticatorHandle};
+
+        struct TestAuth;
+        impl ClientAuthenticator for TestAuth {
+            fn get_request_metadata(
+                &self,
+            ) -> Result<Vec<(http::HeaderName, http::HeaderValue)>, AuthError> {
+                Ok(vec![(http::header::AUTHORIZATION, http::HeaderValue::from_static("Bearer test"))])
+            }
+        }
+
         // Use a client that will fail fast if actually used
         let http_client = Client::builder()
             .timeout(StdDuration::from_millis(1))
@@ -135,6 +146,7 @@ mod tests {
         LogsIngestionClient::from_parts(
             http_client,
             "http://localhost".to_string(),
+            ClientAuthenticatorHandle::new(TestAuth),
             create_test_metrics(),
         )
     }

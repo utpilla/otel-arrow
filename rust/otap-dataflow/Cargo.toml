@@ -216,6 +216,10 @@ unchecked-arithmetic = []
 # Experimental features
 experimental-tls = ["otap-df-otap/experimental-tls", "dep:rustls"]
 
+# Contrib extensions (opt-in) - now in contrib-nodes
+contrib-extensions = ["otap-df-contrib-nodes/contrib-extensions"]
+azure-identity-auth-extension = ["otap-df-contrib-nodes/azure-identity-auth-extension"]
+bearer-token-auth-extension = ["otap-df-contrib-nodes/bearer-token-auth-extension"]
 # Contrib exporters (opt-in) - now in contrib-nodes
 contrib-exporters = ["otap-df-contrib-nodes/contrib-exporters"]
 geneva-exporter = ["otap-df-contrib-nodes/geneva-exporter"]
