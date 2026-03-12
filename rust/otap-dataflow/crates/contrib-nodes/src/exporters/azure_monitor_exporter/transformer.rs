@@ -411,7 +411,8 @@ mod tests {
     }
 
     fn create_test_config() -> Config {
-        use super::super::config::{ApiConfig, AuthConfig, SchemaConfig};
+        use super::super::config::{ApiConfig, SchemaConfig};
+        use otap_df_engine::extensions::auth::ClientAuthConfig;
 
         Config {
             api: ApiConfig {
@@ -431,7 +432,9 @@ mod tests {
                     ]),
                 },
             },
-            auth: AuthConfig::default(),
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         }
     }
 
@@ -719,7 +722,8 @@ mod tests {
 
     #[test]
     fn test_empty_schema_mappings() {
-        use super::super::config::{ApiConfig, AuthConfig, SchemaConfig};
+        use super::super::config::{ApiConfig, SchemaConfig};
+        use otap_df_engine::extensions::auth::ClientAuthConfig;
 
         let config = Config {
             api: ApiConfig {
@@ -732,7 +736,9 @@ mod tests {
                     log_record_mapping: HashMap::new(),
                 },
             },
-            auth: AuthConfig::default(),
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         };
 
         let transformer = Transformer::new(&config, create_test_metrics());

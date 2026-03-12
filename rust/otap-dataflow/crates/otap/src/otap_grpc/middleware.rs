@@ -3,4 +3,5 @@
 
 //! Middlewares for gRPC server
 
+pub mod auth;
 pub mod zstd_header;

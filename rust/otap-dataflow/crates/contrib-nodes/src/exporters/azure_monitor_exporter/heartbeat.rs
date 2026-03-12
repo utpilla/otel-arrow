@@ -7,10 +7,8 @@ use super::AZURE_MONITOR_EXPORTER_URN;
 use super::config::ApiConfig;
 use super::error::Error;
 use chrono::Utc;
-use reqwest::{
-    Client,
-    header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue},
-};
+use otap_df_engine::extensions::auth::ClientAuthenticatorHandle;
+use reqwest::{Client, header::CONTENT_TYPE};
 use std::time::Duration;
 use sysinfo::System;
 
@@ -23,8 +21,8 @@ pub struct Heartbeat {
     endpoint: String,
     heartbeat_row: HeartbeatRow,
 
-    /// Pre-formatted authorization header for zero-allocation reuse
-    pub auth_header: HeaderValue,
+    /// Client authenticator handle provided by an auth extension.
+    auth: ClientAuthenticatorHandle,
 }
 
 #[derive(Serialize)]
@@ -109,7 +107,7 @@ fn default_heartbeat_os_minor_version() -> String {
 
 impl Heartbeat {
     /// Create a new Heartbeat instance.
-    pub fn new(config: &ApiConfig) -> Result<Self, Error> {
+    pub fn new(config: &ApiConfig, auth: ClientAuthenticatorHandle) -> Result<Self, Error> {
         let http_client = Client::builder()
             .http1_only()
             .timeout(Duration::from_secs(30))
@@ -133,14 +131,14 @@ impl Heartbeat {
                 os_major_version: default_heartbeat_os_major_version(),
                 os_minor_version: default_heartbeat_os_minor_version(),
             },
-            auth_header: HeaderValue::from_static("Bearer "),
+            auth,
         })
     }
 
     /// Create a Heartbeat from individual components (for testing).
     #[cfg(test)]
     #[must_use]
-    pub fn from_parts(client: Client, endpoint: String) -> Self {
+    pub fn from_parts(client: Client, endpoint: String, auth: ClientAuthenticatorHandle) -> Self {
         Self {
             client,
             endpoint,
@@ -152,24 +150,30 @@ impl Heartbeat {
                 os_major_version: "1".to_string(),
                 os_minor_version: "0".to_string(),
             },
-            auth_header: HeaderValue::from_static("Bearer "),
+            auth,
         }
-    }
-
-    /// Update the authorization header with a new access token.
-    pub fn update_auth(&mut self, header: HeaderValue) {
-        self.auth_header = header;
     }
 
     /// Send a heartbeat to the Azure Monitor Logs Ingestion endpoint.
     pub async fn send(&mut self) -> Result<(), Error> {
         self.heartbeat_row.time = Utc::now().to_rfc3339();
         let payload = serde_json::json!([self.heartbeat_row]);
-        let response = self
+
+        let auth_headers = self
+            .auth
+            .get_request_metadata()
+            .map_err(|e| Error::ClientAuthUnavailable(e.to_string()))?;
+
+        let mut request = self
             .client
             .post(&self.endpoint)
-            .header(CONTENT_TYPE, "application/json")
-            .header(AUTHORIZATION, &self.auth_header)
+            .header(CONTENT_TYPE, "application/json");
+
+        for (name, value) in auth_headers {
+            request = request.header(name, value);
+        }
+
+        let response = request
             .body(payload.to_string())
             .send()
             .await
@@ -208,9 +212,29 @@ impl Heartbeat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use otap_df_engine::extensions::auth::{AuthError, ClientAuthenticator};
     use std::collections::HashMap;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // ==================== Test Auth Helper ====================
+
+    struct TestAuth;
+
+    impl ClientAuthenticator for TestAuth {
+        fn get_request_metadata(
+            &self,
+        ) -> Result<Vec<(http::HeaderName, http::HeaderValue)>, AuthError> {
+            Ok(vec![(
+                http::header::AUTHORIZATION,
+                http::HeaderValue::from_static("Bearer test_token"),
+            )])
+        }
+    }
+
+    fn create_test_auth() -> ClientAuthenticatorHandle {
+        ClientAuthenticatorHandle::new(TestAuth)
+    }
 
     // ==================== Test Helpers ====================
 
@@ -378,10 +402,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let mut heartbeat = Heartbeat::from_parts(create_test_client(), mock_server.uri());
+        let mut heartbeat =
+            Heartbeat::from_parts(create_test_client(), mock_server.uri(), create_test_auth());
 
-        // Set up auth header for the test
-        heartbeat.update_auth(HeaderValue::from_static("Bearer test_token"));
         let result = heartbeat.send().await;
 
         assert!(result.is_ok());
@@ -396,9 +419,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let mut heartbeat = Heartbeat::from_parts(create_test_client(), mock_server.uri());
+        let mut heartbeat =
+            Heartbeat::from_parts(create_test_client(), mock_server.uri(), create_test_auth());
 
-        heartbeat.update_auth(HeaderValue::from_static("Bearer test_token"));
         let result = heartbeat.send().await;
 
         assert!(result.is_err());
@@ -422,9 +445,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let mut heartbeat = Heartbeat::from_parts(create_test_client(), mock_server.uri());
+        let mut heartbeat =
+            Heartbeat::from_parts(create_test_client(), mock_server.uri(), create_test_auth());
 
-        heartbeat.update_auth(HeaderValue::from_static("Bearer test_token"));
         let result = heartbeat.send().await;
 
         assert!(result.is_err());
@@ -452,9 +475,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let mut heartbeat = Heartbeat::from_parts(create_test_client(), mock_server.uri());
+        let mut heartbeat =
+            Heartbeat::from_parts(create_test_client(), mock_server.uri(), create_test_auth());
 
-        heartbeat.update_auth(HeaderValue::from_static("Bearer test_token"));
         let result = heartbeat.send().await;
 
         assert!(result.is_err());
@@ -475,9 +498,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let mut heartbeat = Heartbeat::from_parts(create_test_client(), mock_server.uri());
+        let mut heartbeat =
+            Heartbeat::from_parts(create_test_client(), mock_server.uri(), create_test_auth());
 
-        heartbeat.update_auth(HeaderValue::from_static("Bearer test_token"));
         let result = heartbeat.send().await;
 
         assert!(result.is_err());
@@ -498,9 +521,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let mut heartbeat = Heartbeat::from_parts(create_test_client(), mock_server.uri());
+        let mut heartbeat =
+            Heartbeat::from_parts(create_test_client(), mock_server.uri(), create_test_auth());
 
-        heartbeat.update_auth(HeaderValue::from_static("Bearer test_token"));
         let result = heartbeat.send().await;
 
         assert!(result.is_err());
@@ -519,9 +542,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let mut heartbeat = Heartbeat::from_parts(create_test_client(), mock_server.uri());
+        let mut heartbeat =
+            Heartbeat::from_parts(create_test_client(), mock_server.uri(), create_test_auth());
 
-        heartbeat.update_auth(HeaderValue::from_static("Bearer test_token"));
         let result = heartbeat.send().await;
 
         assert!(result.is_err());
@@ -537,30 +560,16 @@ mod tests {
 
     #[test]
     fn test_from_parts_creates_heartbeat() {
-        let heartbeat =
-            Heartbeat::from_parts(create_test_client(), "https://example.com".to_string());
+        let heartbeat = Heartbeat::from_parts(
+            create_test_client(),
+            "https://example.com".to_string(),
+            create_test_auth(),
+        );
 
         assert_eq!(heartbeat.endpoint, "https://example.com");
         // Verify heartbeat row has default values
         assert!(!heartbeat.heartbeat_row.version.is_empty());
         assert!(!heartbeat.heartbeat_row.os_name.is_empty());
         assert!(!heartbeat.heartbeat_row.computer.is_empty());
-    }
-
-    // ==================== update_auth Tests ====================
-
-    #[test]
-    fn test_update_auth_changes_header() {
-        let mut heartbeat =
-            Heartbeat::from_parts(create_test_client(), "https://example.com".to_string());
-
-        assert_eq!(heartbeat.auth_header, HeaderValue::from_static("Bearer "));
-
-        heartbeat.update_auth(HeaderValue::from_static("Bearer new_token"));
-
-        assert_eq!(
-            heartbeat.auth_header,
-            HeaderValue::from_static("Bearer new_token")
-        );
     }
 }

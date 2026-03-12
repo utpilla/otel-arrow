@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::Error;
+use otap_df_engine::extensions::auth::ClientAuthConfig;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -13,54 +14,11 @@ pub struct Config {
     /// API configuration for Azure Monitor
     pub api: ApiConfig,
 
-    /// Authentication configuration
-    #[serde(default)]
-    pub auth: AuthConfig,
-}
-
-/// Authentication method for Azure
-#[derive(Debug, Deserialize, Clone, PartialEq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthMethod {
-    /// Use Managed Identity (system or user-assigned with client_id)
-    #[serde(alias = "msi", alias = "managed_identity")]
-    #[default]
-    ManagedIdentity,
-
-    /// Use developer tools (Azure CLI, Azure Developer CLI)
-    #[serde(alias = "dev", alias = "developer", alias = "cli")]
-    Development,
-}
-
-/// Authentication configuration for Azure
-#[derive(Debug, Deserialize, Clone)]
-pub struct AuthConfig {
-    /// Authentication method to use
-    #[serde(default)]
-    pub method: AuthMethod,
-
-    /// Client ID for user-assigned managed identity (optional)
-    /// Only used when method is ManagedIdentity
-    /// If not provided with ManagedIdentity, system-assigned identity will be used
-    pub client_id: Option<String>,
-
-    /// OAuth scope for token acquisition (defaults to "https://monitor.azure.com/.default")
-    #[serde(default = "default_scope")]
-    pub scope: String,
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            method: AuthMethod::default(),
-            client_id: None,
-            scope: default_scope(),
-        }
-    }
-}
-
-fn default_scope() -> String {
-    "https://monitor.azure.com/.default".to_string()
+    /// Client authentication configuration.
+    ///
+    /// The `authenticator` field must match the node name of an
+    /// `azure_identity_auth` extension declared in the pipeline configuration.
+    pub auth: ClientAuthConfig,
 }
 
 /// API configuration for connecting to Azure Monitor
@@ -99,12 +57,10 @@ pub struct SchemaConfig {
 impl Config {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), Error> {
-        // Validate auth configuration
-        if self.auth.scope.is_empty() {
-            return Err(Error::Config(
-                "Invalid configuration: auth scope must be non-empty".to_string(),
-            ));
-        }
+        // Validate auth extension reference
+        self.auth
+            .validate()
+            .map_err(|e| Error::Config(format!("Invalid configuration: {e}")))?;
 
         // Validate API configuration
         if self.api.dcr_endpoint.is_empty() {
@@ -194,10 +150,8 @@ mod tests {
                 dcr: "mydcr".to_string(),
                 schema: SchemaConfig::default(),
             },
-            auth: AuthConfig {
-                scope: "https://monitor.azure.com/.default".to_string(),
-                client_id: Some("myclientid".to_string()),
-                method: AuthMethod::ManagedIdentity,
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
             },
         };
 
@@ -213,7 +167,9 @@ mod tests {
                 dcr: "".to_string(),
                 schema: SchemaConfig::default(),
             },
-            auth: AuthConfig::default(),
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         };
 
         let result = config.validate();
@@ -221,6 +177,30 @@ mod tests {
         assert_eq!(
             result.unwrap_err().to_string(),
             "Configuration error: Invalid configuration: dcr_endpoint must be non-empty"
+        );
+    }
+
+    #[test]
+    fn test_invalid_config_missing_auth_authenticator() {
+        let config = Config {
+            api: ApiConfig {
+                dcr_endpoint: "https://example.com".to_string(),
+                stream_name: "mystream".to_string(),
+                dcr: "mydcr".to_string(),
+                schema: SchemaConfig::default(),
+            },
+            auth: ClientAuthConfig {
+                authenticator: "".to_string(),
+            },
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("auth.authenticator must be non-empty")
         );
     }
 
@@ -241,7 +221,9 @@ mod tests {
                     ]),
                 },
             },
-            auth: AuthConfig::default(),
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         };
 
         let result = config.validate();
@@ -281,7 +263,9 @@ mod tests {
                     ]),
                 },
             },
-            auth: AuthConfig::default(),
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         };
 
         let result = config.validate();
@@ -310,7 +294,9 @@ mod tests {
                     )]),
                 },
             },
-            auth: AuthConfig::default(),
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         };
 
         let result = config.validate();

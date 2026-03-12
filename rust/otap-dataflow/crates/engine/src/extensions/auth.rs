@@ -49,8 +49,73 @@
 //! }
 //! ```
 
+use serde::Deserialize;
 use std::fmt;
 use std::sync::{Arc, Mutex};
+
+// ─── Shared config structs ─────────────────────────────────────────────────
+
+/// Configuration for client-side authentication on exporter nodes.
+///
+/// Exporters that need auth embed this struct in their config so that the
+/// field name `auth.authenticator` is consistent across all exporters
+///
+/// # YAML example
+///
+/// ```yaml
+/// azure-monitor-exporter:
+///   type: "urn:microsoft:exporter:azure_monitor"
+///   config:
+///     auth:
+///       authenticator: "azure_auth"   # node name of the auth extension
+/// ```
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ClientAuthConfig {
+    /// The node name of the extension that provides [`ClientAuthenticatorHandle`].
+    pub authenticator: String,
+}
+
+impl ClientAuthConfig {
+    /// Validates that the authenticator reference is non-empty.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.authenticator.is_empty() {
+            return Err("auth.authenticator must be non-empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Configuration for server-side authentication on receiver nodes.
+///
+/// Receivers that need auth embed this struct in their config so that the
+/// field name `auth.authenticator` is consistent across all receivers.
+///
+/// # YAML example
+///
+/// ```yaml
+/// otlp-receiver:
+///   type: "urn:otel:receiver:otlp"
+///   config:
+///     auth:
+///       authenticator: "bearer_auth"  # node name of the auth extension
+/// ```
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ServerAuthConfig {
+    /// The node name of the extension that provides [`ServerAuthenticatorHandle`].
+    pub authenticator: String,
+}
+
+impl ServerAuthConfig {
+    /// Validates that the authenticator reference is non-empty.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.authenticator.is_empty() {
+            return Err("auth.authenticator must be non-empty".to_string());
+        }
+        Ok(())
+    }
+}
 
 /// An error returned by authenticator operations.
 #[derive(Debug, Clone)]

@@ -27,6 +27,7 @@ use crate::tls_utils::{build_tls_acceptor, create_tls_stream};
 
 use crate::otap_grpc::common;
 use crate::otap_grpc::common::AckRegistry;
+use crate::otap_grpc::middleware::auth::AuthMiddleware;
 use crate::otap_grpc::server_settings::GrpcServerSettings;
 use crate::otlp_http::HttpServerSettings;
 use crate::shared_concurrency::SharedConcurrencyLayer;
@@ -120,6 +121,23 @@ const TELEMETRY_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// Optional server-side authentication.
+    ///
+    /// When configured, every incoming request must present valid credentials
+    /// matching the referenced auth extension (e.g., a bearer token).
+    ///
+    /// # Example
+    /// ```yaml
+    /// config:
+    ///   auth:
+    ///     authenticator: "bearer_auth"
+    ///   protocols:
+    ///     grpc:
+    ///       listening_addr: "0.0.0.0:4317"
+    /// ```
+    #[serde(default)]
+    pub auth: Option<otap_df_engine::extensions::auth::ServerAuthConfig>,
+
     /// Protocol configurations.
     ///
     /// At least one protocol (gRPC or HTTP) must be configured.
@@ -234,6 +252,12 @@ impl OTLPReceiver {
                 error: "At least one protocol (grpc or http) must be configured under 'protocols'"
                     .to_string(),
             });
+        }
+
+        // Validate auth config if present.
+        if let Some(auth) = &config.auth {
+            auth.validate()
+                .map_err(|e| otap_df_config::error::Error::InvalidUserConfig { error: e })?;
         }
 
         // Validate that gRPC and HTTP do not have conflicting listening addresses.
@@ -485,8 +509,32 @@ impl shared::Receiver<OtapPdata> for OTLPReceiver {
         mut self: Box<Self>,
         mut ctrl_msg_recv: shared::ControlChannel<OtapPdata>,
         effect_handler: shared::EffectHandler<OtapPdata>,
-        _extension_registry: ExtensionRegistry,
+        extension_registry: ExtensionRegistry,
     ) -> Result<TerminalState, Error> {
+        // Resolve the optional auth handle from the extension registry.
+        let auth_handle = if let Some(auth_config) = &self.config.auth {
+            let handle = extension_registry
+                .get::<otap_df_engine::extensions::auth::ServerAuthenticatorHandle>(
+                    &auth_config.authenticator,
+                )
+                .map_err(|e| Error::ReceiverError {
+                    receiver: effect_handler.receiver_id(),
+                    kind: ReceiverErrorKind::Configuration,
+                    error: format!(
+                        "failed to resolve auth extension '{}': {e}",
+                        auth_config.authenticator
+                    ),
+                    source_detail: String::new(),
+                })?;
+            otap_df_telemetry::otel_info!(
+                "otlp.receiver.auth.enabled",
+                authenticator = %auth_config.authenticator
+            );
+            Some(handle)
+        } else {
+            None
+        };
+
         let grpc_enabled = self.config.protocols.grpc.is_some();
         let both_enabled = self.config.protocols.has_both();
 
@@ -589,8 +637,11 @@ impl shared::Receiver<OtapPdata> for OTLPReceiver {
                     Either::Right(GlobalConcurrencyLimitLayer::new(grpc_max))
                 };
 
-                let mut server =
-                    common::apply_server_tuning(Server::builder(), grpc_config).layer(limit_layer);
+                let mut server = common::apply_server_tuning(Server::builder(), grpc_config)
+                    .layer(limit_layer)
+                    .layer(tonic_middleware::MiddlewareLayer::new(AuthMiddleware::new(
+                        auth_handle.clone(),
+                    )));
 
                 if let Some(timeout) = grpc_config.timeout {
                     server = server.timeout(timeout);
@@ -842,6 +893,7 @@ mod tests {
             ..Default::default()
         };
         Config {
+            auth: None,
             protocols: Protocols {
                 grpc: Some(grpc),
                 http: None,
@@ -857,6 +909,7 @@ mod tests {
             ..Default::default()
         };
         Config {
+            auth: None,
             protocols: Protocols {
                 grpc: None,
                 http: Some(http),
