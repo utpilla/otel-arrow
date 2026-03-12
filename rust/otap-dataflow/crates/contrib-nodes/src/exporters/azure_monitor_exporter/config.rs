@@ -1,8 +1,8 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use otap_df_engine::extensions::auth::ClientAuthConfig;
 use super::Error;
+use otap_df_engine::extensions::auth::ClientAuthConfig;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -58,9 +58,9 @@ impl Config {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), Error> {
         // Validate auth extension reference
-        self.auth.validate().map_err(|e| {
-            Error::Config(format!("Invalid configuration: {e}"))
-        })?;
+        self.auth
+            .validate()
+            .map_err(|e| Error::Config(format!("Invalid configuration: {e}")))?;
 
         // Validate API configuration
         if self.api.dcr_endpoint.is_empty() {
@@ -150,7 +150,9 @@ mod tests {
                 dcr: "mydcr".to_string(),
                 schema: SchemaConfig::default(),
             },
-            auth: ClientAuthConfig { authenticator: "azure_auth".to_string() },
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         };
 
         assert!(config.validate().is_ok());
@@ -165,7 +167,9 @@ mod tests {
                 dcr: "".to_string(),
                 schema: SchemaConfig::default(),
             },
-            auth: ClientAuthConfig { authenticator: "azure_auth".to_string() },
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         };
 
         let result = config.validate();
@@ -185,15 +189,19 @@ mod tests {
                 dcr: "mydcr".to_string(),
                 schema: SchemaConfig::default(),
             },
-            auth: ClientAuthConfig { authenticator: "".to_string() },
+            auth: ClientAuthConfig {
+                authenticator: "".to_string(),
+            },
         };
 
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("auth.authenticator must be non-empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("auth.authenticator must be non-empty")
+        );
     }
 
     #[test]
@@ -213,7 +221,9 @@ mod tests {
                     ]),
                 },
             },
-            auth: ClientAuthConfig { authenticator: "azure_auth".to_string() },
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         };
 
         let result = config.validate();
@@ -253,7 +263,9 @@ mod tests {
                     ]),
                 },
             },
-            auth: ClientAuthConfig { authenticator: "azure_auth".to_string() },
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         };
 
         let result = config.validate();
@@ -282,7 +294,9 @@ mod tests {
                     )]),
                 },
             },
-            auth: ClientAuthConfig { authenticator: "azure_auth".to_string() },
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         };
 
         let result = config.validate();

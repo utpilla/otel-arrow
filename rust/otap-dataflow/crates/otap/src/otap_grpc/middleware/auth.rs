@@ -43,11 +43,7 @@ where
     S: ServiceBound,
     S::Future: Send,
 {
-    async fn call(
-        &self,
-        req: Request<Body>,
-        mut service: S,
-    ) -> Result<Response<Body>, S::Error> {
+    async fn call(&self, req: Request<Body>, mut service: S) -> Result<Response<Body>, S::Error> {
         if let Some(auth) = &self.auth {
             if let Err(e) = auth.authenticate(req.headers()) {
                 let status = tonic::Status::unauthenticated(e.message);

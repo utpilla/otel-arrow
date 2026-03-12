@@ -205,7 +205,10 @@ mod tests {
     fn wrong_token_is_rejected() {
         let auth = make_auth("correct-token");
         let mut headers = HeaderMap::new();
-        _ = headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer wrong-token"));
+        _ = headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer wrong-token"),
+        );
         let err = auth.authenticate(&headers).unwrap_err();
         assert!(err.message.contains("invalid bearer token"));
     }
@@ -214,7 +217,10 @@ mod tests {
     fn non_bearer_scheme_is_rejected() {
         let auth = make_auth("secret");
         let mut headers = HeaderMap::new();
-        _ = headers.insert(AUTHORIZATION, HeaderValue::from_static("Basic dXNlcjpwYXNz"));
+        _ = headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Basic dXNlcjpwYXNz"),
+        );
         let err = auth.authenticate(&headers).unwrap_err();
         assert!(err.message.contains("not a Bearer token"));
     }

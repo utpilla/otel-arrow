@@ -126,14 +126,19 @@ mod tests {
     }
 
     fn create_test_client() -> LogsIngestionClient {
-        use otap_df_engine::extensions::auth::{AuthError, ClientAuthenticator, ClientAuthenticatorHandle};
+        use otap_df_engine::extensions::auth::{
+            AuthError, ClientAuthenticator, ClientAuthenticatorHandle,
+        };
 
         struct TestAuth;
         impl ClientAuthenticator for TestAuth {
             fn get_request_metadata(
                 &self,
             ) -> Result<Vec<(http::HeaderName, http::HeaderValue)>, AuthError> {
-                Ok(vec![(http::header::AUTHORIZATION, http::HeaderValue::from_static("Bearer test"))])
+                Ok(vec![(
+                    http::header::AUTHORIZATION,
+                    http::HeaderValue::from_static("Bearer test"),
+                )])
             }
         }
 

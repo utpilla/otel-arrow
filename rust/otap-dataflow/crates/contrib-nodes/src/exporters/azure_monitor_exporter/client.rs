@@ -379,9 +379,13 @@ mod tests {
 
         let http_client = create_test_http_client();
 
-        let client =
-            LogsIngestionClient::new(&api_config, http_client, create_test_auth(), create_test_metrics())
-                .unwrap();
+        let client = LogsIngestionClient::new(
+            &api_config,
+            http_client,
+            create_test_auth(),
+            create_test_metrics(),
+        )
+        .unwrap();
 
         assert!(client.endpoint.contains("dcr-abc-123-def"));
         assert!(client.endpoint.contains("Custom-Stream_Name"));

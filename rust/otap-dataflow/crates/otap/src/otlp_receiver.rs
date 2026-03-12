@@ -256,9 +256,8 @@ impl OTLPReceiver {
 
         // Validate auth config if present.
         if let Some(auth) = &config.auth {
-            auth.validate().map_err(|e| {
-                otap_df_config::error::Error::InvalidUserConfig { error: e }
-            })?;
+            auth.validate()
+                .map_err(|e| otap_df_config::error::Error::InvalidUserConfig { error: e })?;
         }
 
         // Validate that gRPC and HTTP do not have conflicting listening addresses.
@@ -638,12 +637,11 @@ impl shared::Receiver<OtapPdata> for OTLPReceiver {
                     Either::Right(GlobalConcurrencyLimitLayer::new(grpc_max))
                 };
 
-                let mut server =
-                    common::apply_server_tuning(Server::builder(), grpc_config)
-                        .layer(limit_layer)
-                        .layer(tonic_middleware::MiddlewareLayer::new(AuthMiddleware::new(
-                            auth_handle.clone(),
-                        )));
+                let mut server = common::apply_server_tuning(Server::builder(), grpc_config)
+                    .layer(limit_layer)
+                    .layer(tonic_middleware::MiddlewareLayer::new(AuthMiddleware::new(
+                        auth_handle.clone(),
+                    )));
 
                 if let Some(timeout) = grpc_config.timeout {
                     server = server.timeout(timeout);

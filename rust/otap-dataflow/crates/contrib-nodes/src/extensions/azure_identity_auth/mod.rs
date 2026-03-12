@@ -5,17 +5,17 @@
 //!
 //! This extension acquires Azure AD tokens using `azure_identity` credentials
 //! (Managed Identity or Developer Tools) and exposes them as a
-//! [`ClientAuthenticatorHandle`] so that exporters and other pipeline
-//! components can attach `Authorization: Bearer <token>` headers without
-//! managing their own token lifecycle.
+//! [`BearerTokenProviderHandle`] so that exporters and other pipeline
+//! components can obtain bearer tokens without managing their own token
+//! lifecycle.
 //!
 //! # Token Refresh
 //!
 //! The extension's [`start`](Extension::start) loop proactively refreshes
 //! the token before it expires and broadcasts updates via a
 //! [`tokio::sync::watch`] channel.  Consumers call
-//! [`ClientAuthenticatorHandle::get_request_metadata`] to pull the latest
-//! cached header — the watch channel ensures efficient, lock-free reads.
+//! [`BearerTokenProviderHandle::get_token`] to pull the latest cached
+//! token — the watch channel ensures efficient, lock-free reads.
 //!
 //! # Example YAML Configuration
 //!
@@ -42,12 +42,13 @@ use otap_df_engine::context::PipelineContext;
 use otap_df_engine::control::ExtensionControlMsg;
 use otap_df_engine::error::Error as EngineError;
 use otap_df_engine::extension::ExtensionWrapper;
-use otap_df_engine::extensions::auth::{AuthError, ClientAuthenticator, ClientAuthenticatorHandle};
 use otap_df_engine::extensions::ExtensionHandles;
+use otap_df_engine::extensions::bearer_token::{
+    BearerToken, BearerTokenError, BearerTokenProvider, BearerTokenProviderHandle,
+};
 use otap_df_engine::local::extension::{self as local, ControlChannel, EffectHandler};
 use otap_df_engine::node::NodeId;
 use otap_df_telemetry::{otel_debug, otel_error, otel_info, otel_warn};
-use http::header::HeaderValue;
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -109,29 +110,25 @@ fn default_scope() -> String {
     "https://monitor.azure.com/.default".to_string()
 }
 
-// ─── ClientAuthenticator implementation ───────────────────────────────────
+// ─── BearerTokenProvider implementation ────────────────────────────────────
 
-/// A [`ClientAuthenticator`] backed by a cached Azure AD bearer token.
+/// A [`BearerTokenProvider`] backed by a cached Azure AD bearer token.
 ///
-/// The extension's background loop refreshes the token and broadcasts it via
-/// a [`tokio::sync::watch`] channel.  Consumers (exporters, heartbeat
-/// clients, etc.) read the latest cached header on every call to
-/// [`get_request_metadata`] using the watch receiver's lock-free borrow.
-struct AzureIdentityClientAuth {
-    token_rx: watch::Receiver<Option<HeaderValue>>,
+/// Reads from a `watch` channel. The extension's background loop refreshes
+/// the token and broadcasts `BearerToken` values.
+struct AzureIdentityTokenProvider {
+    token_rx: watch::Receiver<Option<BearerToken>>,
 }
 
-impl ClientAuthenticator for AzureIdentityClientAuth {
-    fn get_request_metadata(
-        &self,
-    ) -> Result<Vec<(http::HeaderName, HeaderValue)>, AuthError> {
-        let header = self.token_rx.borrow().clone();
-        match header {
-            Some(h) => Ok(vec![(http::header::AUTHORIZATION, h)]),
-            None => Err(AuthError {
-                message: "Azure AD token not yet available".into(),
-            }),
-        }
+impl BearerTokenProvider for AzureIdentityTokenProvider {
+    fn get_token(&self) -> Result<BearerToken, BearerTokenError> {
+        self.token_rx.borrow().clone().ok_or(BearerTokenError {
+            message: "Azure AD token not yet available".into(),
+        })
+    }
+
+    fn subscribe_token_refresh(&self) -> watch::Receiver<Option<BearerToken>> {
+        self.token_rx.clone()
     }
 }
 
@@ -140,13 +137,12 @@ impl ClientAuthenticator for AzureIdentityClientAuth {
 /// The Azure Identity Auth extension.
 ///
 /// Runs a background loop that proactively refreshes an Azure AD access token
-/// and broadcasts the formatted `Authorization: Bearer <token>` header value
-/// via a [`tokio::sync::watch`] channel for consumers to pull via
-/// [`ClientAuthenticatorHandle::get_request_metadata`].
+/// and broadcasts [`BearerToken`] values via a [`tokio::sync::watch`] channel
+/// for consumers to pull via [`BearerTokenProviderHandle::get_token`].
 struct AzureIdentityAuthExtension {
     credential: Arc<dyn TokenCredential>,
     scope: String,
-    token_tx: watch::Sender<Option<HeaderValue>>,
+    bearer_token_tx: watch::Sender<Option<BearerToken>>,
 }
 
 impl AzureIdentityAuthExtension {
@@ -257,38 +253,27 @@ impl local::Extension for AzureIdentityAuthExtension {
                 _ = tokio::time::sleep_until(next_token_refresh) => {
                     match self.get_token().await {
                         Ok(access_token) => {
-                            match HeaderValue::from_str(
-                                &format!("Bearer {}", access_token.token.secret()),
-                            ) {
-                                Ok(header) => {
-                                    let _ = self.token_tx.send_replace(Some(header));
+                            let _ = self.bearer_token_tx.send_replace(Some(
+                                BearerToken::new(
+                                    access_token.token.secret().to_string(),
+                                    access_token.expires_on.unix_timestamp(),
+                                ),
+                            ));
 
-                                    next_token_refresh = get_next_token_refresh(&access_token);
+                            next_token_refresh = get_next_token_refresh(&access_token);
 
-                                    let refresh_in = next_token_refresh
-                                        .saturating_duration_since(tokio::time::Instant::now());
-                                    let total_secs = refresh_in.as_secs();
-                                    let hours = total_secs / 3600;
-                                    let minutes = (total_secs % 3600) / 60;
-                                    let seconds = total_secs % 60;
+                            let refresh_in = next_token_refresh
+                                .saturating_duration_since(tokio::time::Instant::now());
+                            let total_secs = refresh_in.as_secs();
+                            let hours = total_secs / 3600;
+                            let minutes = (total_secs % 3600) / 60;
+                            let seconds = total_secs % 60;
 
-                                    otel_info!(
-                                        "azure_identity_auth.token_refresh",
-                                        refresh_in =
-                                            format!("{}h {}m {}s", hours, minutes, seconds)
-                                    );
-                                }
-                                Err(e) => {
-                                    otel_error!(
-                                        "azure_identity_auth.header_creation_failed",
-                                        error = ?e
-                                    );
-                                    next_token_refresh = tokio::time::Instant::now()
-                                        + tokio::time::Duration::from_secs(
-                                            MIN_TOKEN_REFRESH_INTERVAL_SECS,
-                                        );
-                                }
-                            }
+                            otel_info!(
+                                "azure_identity_auth.token_refresh",
+                                refresh_in =
+                                    format!("{}h {}m {}s", hours, minutes, seconds)
+                            );
                         }
                         Err(e) => {
                             otel_error!(
@@ -331,22 +316,22 @@ fn create_credential(
                 );
             }
 
-            ManagedIdentityCredential::new(Some(options)).map(|c| c as Arc<dyn TokenCredential>).map_err(|e| {
-                otap_df_config::error::Error::InvalidUserConfig {
+            ManagedIdentityCredential::new(Some(options))
+                .map(|c| c as Arc<dyn TokenCredential>)
+                .map_err(|e| otap_df_config::error::Error::InvalidUserConfig {
                     error: format!("Failed to create managed identity credential: {e}"),
-                }
-            })
+                })
         }
         AuthMethod::Development => {
             otel_info!(
                 "azure_identity_auth.credential_type",
                 method = "developer_tools"
             );
-            DeveloperToolsCredential::new(Some(DeveloperToolsCredentialOptions::default())).map(|c| c as Arc<dyn TokenCredential>).map_err(
-                |e| otap_df_config::error::Error::InvalidUserConfig {
+            DeveloperToolsCredential::new(Some(DeveloperToolsCredentialOptions::default()))
+                .map(|c| c as Arc<dyn TokenCredential>)
+                .map_err(|e| otap_df_config::error::Error::InvalidUserConfig {
                     error: format!("Failed to create developer tools credential: {e}"),
-                },
-            )
+                })
         }
     }
 }
@@ -379,20 +364,21 @@ pub static AZURE_IDENTITY_AUTH_EXTENSION: ExtensionFactory = ExtensionFactory {
         // Create the Azure credential
         let credential = create_credential(&cfg)?;
 
-        // Create watch channel: extension broadcasts token updates,
-        // authenticator reads the latest value via the receiver.
-        let (token_tx, token_rx) = watch::channel(None);
+        // Create watch channel for broadcasting BearerToken updates
+        let (bearer_token_tx, bearer_token_rx) = watch::channel(None);
 
-        // Build the ClientAuthenticator handle for consumers
-        let auth = AzureIdentityClientAuth { token_rx };
+        // Build the BearerTokenProvider handle
+        let token_provider = AzureIdentityTokenProvider {
+            token_rx: bearer_token_rx,
+        };
         let mut handles = ExtensionHandles::new();
-        handles.register(ClientAuthenticatorHandle::new(auth));
+        handles.register(BearerTokenProviderHandle::new(token_provider));
 
         // Build the extension instance
         let extension = AzureIdentityAuthExtension {
             credential,
             scope: cfg.scope,
-            token_tx,
+            bearer_token_tx,
         };
 
         Ok(ExtensionWrapper::local(
@@ -457,44 +443,6 @@ mod tests {
     }
 
     #[test]
-    fn test_client_auth_returns_none_before_refresh() {
-        let (_tx, rx) = watch::channel(None);
-        let auth = AzureIdentityClientAuth { token_rx: rx };
-
-        let err = auth.get_request_metadata().unwrap_err();
-        assert!(err.message.contains("not yet available"));
-    }
-
-    #[test]
-    fn test_client_auth_returns_cached_header() {
-        let (_tx, rx) = watch::channel(Some(
-            HeaderValue::from_static("Bearer test-token"),
-        ));
-        let auth = AzureIdentityClientAuth { token_rx: rx };
-
-        let metadata = auth.get_request_metadata().unwrap();
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(metadata[0].0, http::header::AUTHORIZATION);
-        assert_eq!(metadata[0].1, "Bearer test-token");
-    }
-
-    #[test]
-    fn test_client_auth_sees_updates() {
-        let (tx, rx) = watch::channel(None);
-        let auth = AzureIdentityClientAuth { token_rx: rx };
-
-        assert!(auth.get_request_metadata().is_err());
-
-        let _ = tx.send_replace(Some(HeaderValue::from_static("Bearer v1")));
-        let meta = auth.get_request_metadata().unwrap();
-        assert_eq!(meta[0].1, "Bearer v1");
-
-        let _ = tx.send_replace(Some(HeaderValue::from_static("Bearer v2")));
-        let meta = auth.get_request_metadata().unwrap();
-        assert_eq!(meta[0].1, "Bearer v2");
-    }
-
-    #[test]
     fn test_get_next_token_refresh_far_future() {
         let now = OffsetDateTime::now_utc();
         let expires_on = now + azure_core::time::Duration::seconds(3600);
@@ -542,12 +490,12 @@ mod tests {
         let (credential, call_count) =
             mock_credential("my-azure-token", azure_core::time::Duration::seconds(3600));
 
-        let (token_tx, token_rx) = watch::channel(None);
+        let (bearer_token_tx, bearer_token_rx) = watch::channel(None);
 
         let extension = AzureIdentityAuthExtension {
             credential,
             scope: "https://monitor.azure.com/.default".to_string(),
-            token_tx,
+            bearer_token_tx,
         };
 
         let config = ExtensionConfig::new("test_azure_auth");
@@ -577,9 +525,9 @@ mod tests {
                 assert!(call_count.load(Ordering::SeqCst) >= 1);
 
                 // Verify token is broadcast via watch channel
-                let header = token_rx.borrow().clone();
-                assert!(header.is_some());
-                assert_eq!(header.unwrap(), "Bearer my-azure-token");
+                let token = bearer_token_rx.borrow().clone();
+                assert!(token.is_some());
+                assert_eq!(token.unwrap().token.secret(), "my-azure-token");
 
                 // Shutdown
                 sender
@@ -630,5 +578,70 @@ mod tests {
             let cfg: Config = serde_json::from_value(json).unwrap();
             assert_eq!(cfg.method, AuthMethod::Development);
         }
+    }
+
+    // ─── BearerTokenProvider tests ────────────────────────────────────────
+
+    #[test]
+    fn test_token_provider_returns_error_before_refresh() {
+        let (_tx, rx) = watch::channel(None);
+        let provider = AzureIdentityTokenProvider { token_rx: rx };
+
+        let err = provider.get_token().unwrap_err();
+        assert!(err.message.contains("not yet available"));
+    }
+
+    #[test]
+    fn test_token_provider_returns_cached_token() {
+        let token = BearerToken::new("azure-token", 1_700_000_000);
+        let (_tx, rx) = watch::channel(Some(token));
+        let provider = AzureIdentityTokenProvider { token_rx: rx };
+
+        let result = provider.get_token().unwrap();
+        assert_eq!(result.token.secret(), "azure-token");
+        assert_eq!(result.expires_on, 1_700_000_000);
+    }
+
+    #[test]
+    fn test_token_provider_sees_updates() {
+        let (tx, rx) = watch::channel(None);
+        let provider = AzureIdentityTokenProvider { token_rx: rx };
+
+        assert!(provider.get_token().is_err());
+
+        let _ = tx.send(Some(BearerToken::new("v1", 100)));
+        let t = provider.get_token().unwrap();
+        assert_eq!(t.token.secret(), "v1");
+
+        let _ = tx.send(Some(BearerToken::new("v2", 200)));
+        let t = provider.get_token().unwrap();
+        assert_eq!(t.token.secret(), "v2");
+    }
+
+    #[tokio::test]
+    async fn test_token_provider_subscribe_receives_updates() {
+        let (tx, rx) = watch::channel(None);
+        let provider = AzureIdentityTokenProvider { token_rx: rx };
+
+        let mut sub = provider.subscribe_token_refresh();
+        let _ = tx.send(Some(BearerToken::new("refreshed", 300)));
+        sub.changed().await.unwrap();
+
+        let token = sub.borrow().clone().unwrap();
+        assert_eq!(token.token.secret(), "refreshed");
+        assert_eq!(token.expires_on, 300);
+    }
+
+    #[test]
+    fn test_token_provider_handle_wraps_correctly() {
+        let (tx, rx) = watch::channel(None);
+        let provider = AzureIdentityTokenProvider { token_rx: rx };
+        let handle = BearerTokenProviderHandle::new(provider);
+
+        assert!(handle.get_token().is_err());
+
+        let _ = tx.send(Some(BearerToken::new("wrapped", 42)));
+        let token = handle.get_token().unwrap();
+        assert_eq!(token.token.secret(), "wrapped");
     }
 }

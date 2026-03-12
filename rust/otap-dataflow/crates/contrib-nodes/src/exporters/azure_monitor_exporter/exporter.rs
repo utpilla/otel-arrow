@@ -463,11 +463,10 @@ impl Exporter<OtapPdata> for AzureMonitorExporter {
             })?;
 
         // Create heartbeat handler (needs auth handle)
-        let mut heartbeat = Heartbeat::new(&self.config.api, auth).map_err(|e| {
-            EngineError::InternalError {
+        let mut heartbeat =
+            Heartbeat::new(&self.config.api, auth).map_err(|e| EngineError::InternalError {
                 message: format!("Failed to create heartbeat handler: {e}"),
-            }
-        })?;
+            })?;
 
         // Start periodic telemetry collection and retain the cancel handle for graceful shutdown
         let telemetry_timer_cancel_handle = effect_handler
@@ -596,7 +595,9 @@ mod tests {
                     log_record_mapping: HashMap::new(),
                 },
             },
-            auth: ClientAuthConfig { authenticator: "azure_auth".to_string() },
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         }
     }
 

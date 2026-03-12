@@ -432,7 +432,9 @@ mod tests {
                     ]),
                 },
             },
-            auth: ClientAuthConfig { authenticator: "azure_auth".to_string() },
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         }
     }
 
@@ -734,11 +736,12 @@ mod tests {
                     log_record_mapping: HashMap::new(),
                 },
             },
-            auth: ClientAuthConfig { authenticator: "azure_auth".to_string() },
+            auth: ClientAuthConfig {
+                authenticator: "azure_auth".to_string(),
+            },
         };
 
         let transformer = Transformer::new(&config, create_test_metrics());
-
 
         let request = ExportLogsServiceRequest {
             resource_logs: vec![ResourceLogs {

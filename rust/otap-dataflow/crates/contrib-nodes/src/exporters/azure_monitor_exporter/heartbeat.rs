@@ -8,10 +8,7 @@ use super::config::ApiConfig;
 use super::error::Error;
 use chrono::Utc;
 use otap_df_engine::extensions::auth::ClientAuthenticatorHandle;
-use reqwest::{
-    Client,
-    header::CONTENT_TYPE,
-};
+use reqwest::{Client, header::CONTENT_TYPE};
 use std::time::Duration;
 use sysinfo::System;
 
