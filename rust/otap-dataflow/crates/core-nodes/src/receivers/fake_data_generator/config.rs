@@ -202,6 +202,12 @@ pub struct TrafficConfig {
     #[serde(default)]
     pub use_trace_context: bool,
 
+    /// Fixed `event_name` to set on every log record (Static data source only).
+    /// When unset, the OTLP `LogRecord.event_name` field is left empty
+    /// (matching the previous default behavior).
+    #[serde(default)]
+    pub log_event_name: Option<String>,
+
     /// Number of attributes to attach to each metric data point (Static data source only).
     /// When set, generates this many key-value attributes per data point.
     /// When unset, uses the default 3 attributes (http.method, http.route, http.status_code).
@@ -352,6 +358,7 @@ impl TrafficConfig {
             log_body_size_bytes: None,
             num_log_attributes: None,
             use_trace_context: false,
+            log_event_name: None,
             num_metric_attributes: None,
             num_data_points_per_metric: None,
         }
@@ -391,6 +398,12 @@ impl TrafficConfig {
     #[must_use]
     pub const fn use_trace_context(&self) -> bool {
         self.use_trace_context
+    }
+
+    /// Returns the fixed `event_name` to set on every log record, if configured.
+    #[must_use]
+    pub fn log_event_name(&self) -> Option<&str> {
+        self.log_event_name.as_deref()
     }
 
     /// Returns the configured number of metric attributes, if set.

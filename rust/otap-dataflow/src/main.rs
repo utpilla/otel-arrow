@@ -8,6 +8,9 @@ use clap::Parser;
 use otap_df_config::config_provider::{ConfigFormat, resolve_config};
 use otap_df_config::engine::OtelDataflowSpec;
 use otap_df_config::policy::{CoreAllocation, CoreRange};
+
+#[cfg(windows)]
+mod stats;
 // Keep this side-effect import so the crate is linked and its `linkme`
 // distributed-slice registrations (contrib nodes) are visible
 // in `OTAP_PIPELINE_FACTORY` at runtime.
@@ -191,6 +194,12 @@ struct Args {
     /// Print the project license (Apache-2.0) and third-party notices, then exit.
     #[arg(long)]
     license: bool,
+
+    /// Auto-exit the engine after N seconds. Useful for fixed-duration A/B
+    /// runs: pair with the run summary printed at exit to compare
+    /// `cpu_time per record` between configs. Windows-only; ignored elsewhere.
+    #[arg(long, value_name = "SECS")]
+    run_duration_secs: Option<u64>,
 }
 
 fn parse_core_id_allocation(s: &str) -> Result<CoreAllocation, String> {
@@ -251,6 +260,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_admin_bind,
         validate_and_exit,
         license,
+        run_duration_secs,
     } = Args::parse();
 
     if license {
@@ -279,8 +289,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(0);
     }
 
+    // On Windows, capture a start-of-run snapshot (cumulative CPU time +
+    // log_records_uploaded counter). The summary is printed once when the
+    // engine exits (either naturally, via the optional auto-exit timer, or
+    // when terminated externally before this point is reached).
+    #[cfg(windows)]
+    let reporter = {
+        let admin_bind = engine_cfg
+            .engine
+            .http_admin
+            .as_ref()
+            .map(|h| h.bind_address.clone())
+            .unwrap_or_else(|| "127.0.0.1:8080".to_string());
+        let reporter = std::sync::Arc::new(stats::RunReporter::new(admin_bind));
+        if let Some(secs) = run_duration_secs {
+            let reporter = std::sync::Arc::clone(&reporter);
+            let _ = std::thread::Builder::new()
+                .name("df-run-timer".into())
+                .spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(secs));
+                    reporter.print_summary();
+                    std::process::exit(0);
+                });
+        }
+        reporter
+    };
+    #[cfg(not(windows))]
+    {
+        // Stats reporter and run-duration timer are currently Windows-only;
+        // silently ignore the flag.
+        let _ = run_duration_secs;
+    }
+
     let controller = Controller::new(&OTAP_PIPELINE_FACTORY);
     let result = controller.run_forever(engine_cfg);
+
+    #[cfg(windows)]
+    reporter.print_summary();
     #[cfg(all(not(tarpaulin_include), feature = "dhat-heap"))]
     {
         dhat_finish();

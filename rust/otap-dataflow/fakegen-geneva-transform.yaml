@@ -1,0 +1,151 @@
+# Geneva Exporter with Attributes Processor (renames all 50 attributes)
+#
+# Same as fakegen-geneva.yaml, but inserts an attributes processor between
+# the fake-data-generator and the geneva-exporter that renames every one of
+# the 50 log-record attributes the generator emits, prefixing each key with
+# "renamed.". The total column count sent to Geneva is unchanged (63 columns
+# per record); only the keys differ.
+#
+# Uses the dedicated `urn:otel:processor:attribute` processor (structured
+# `actions:` list, modeled after the OTel Go collector's attributes
+# processor) instead of the KQL-based `urn:otel:processor:transform` —
+# thinner code path, no plan dispatch.
+#
+# Use this together with fakegen-geneva.yaml for an A/B comparison of the
+# rename's per-record CPU cost:
+#
+#   .\target\release\df_engine.exe --config fakegen-geneva.yaml           --num-cores 1 --run-duration-secs 120
+#   .\target\release\df_engine.exe --config fakegen-geneva-transform.yaml --num-cores 1 --run-duration-secs 120
+#
+# Diff the `cpu_time per record` lines from the two run summaries — that's
+# the rename's per-record CPU cost. See docs/fakegen-log-columns.md for the
+# columns each scenario sends to Geneva and the exact CPU-cost calculation.
+#
+# Records produced by THIS YAML carry `event_name = "Test2"` so they're easy
+# to distinguish from the baseline (`event_name = "Test1"`) in Geneva.
+
+version: otel_dataflow/v1
+
+policies:
+  channel_capacity:
+    control:
+      node: 100
+      pipeline: 100
+    pdata: 128
+
+engine:
+  telemetry:
+    logs:
+      level: "info,otap-df-contrib-nodes=info"
+
+groups:
+  default:
+    pipelines:
+      main:
+        nodes:
+          # Built-in fake data generator producing logs only.
+          # 50 attributes per record — see docs/fakegen-log-columns.md.
+          fake-data-generator:
+            type: "urn:otel:receiver:traffic_generator"
+            config:
+              data_source: static
+              generation_strategy: pre_generated
+              traffic_config:
+                # Same cap as fakegen-geneva.yaml so the A/B comparison has
+                # identical denominators on both sides.
+                signals_per_second: 10000
+                max_batch_size: 1000
+                max_signal_count: null
+                num_log_attributes: 50
+                log_event_name: "Test2"
+                metric_weight: 0
+                trace_weight: 0
+                log_weight: 1
+
+          # Attributes processor: rename ALL 50 attributes by prefixing every
+          # key with "renamed." (e.g. thread.id -> renamed.thread.id). Uses
+          # the dedicated `urn:otel:processor:attribute` processor (structured
+          # `actions:` list) instead of the KQL-based transform processor —
+          # thinner code path, no plan dispatch.
+          rename-attrs:
+            type: "urn:otel:processor:attribute"
+            config:
+              actions:
+                - { action: rename, source_key: "thread.id",                       destination_key: "renamed.thread.id" }
+                - { action: rename, source_key: "thread.name",                     destination_key: "renamed.thread.name" }
+                - { action: rename, source_key: "code.function",                   destination_key: "renamed.code.function" }
+                - { action: rename, source_key: "code.namespace",                  destination_key: "renamed.code.namespace" }
+                - { action: rename, source_key: "code.filepath",                   destination_key: "renamed.code.filepath" }
+                - { action: rename, source_key: "code.lineno",                     destination_key: "renamed.code.lineno" }
+                - { action: rename, source_key: "log.record.uid",                  destination_key: "renamed.log.record.uid" }
+                - { action: rename, source_key: "event.name",                      destination_key: "renamed.event.name" }
+                - { action: rename, source_key: "exception.type",                  destination_key: "renamed.exception.type" }
+                - { action: rename, source_key: "exception.message",               destination_key: "renamed.exception.message" }
+                - { action: rename, source_key: "exception.stacktrace",            destination_key: "renamed.exception.stacktrace" }
+                - { action: rename, source_key: "user.id",                         destination_key: "renamed.user.id" }
+                - { action: rename, source_key: "user.name",                       destination_key: "renamed.user.name" }
+                - { action: rename, source_key: "user.email",                      destination_key: "renamed.user.email" }
+                - { action: rename, source_key: "session.id",                      destination_key: "renamed.session.id" }
+                - { action: rename, source_key: "http.request.method",             destination_key: "renamed.http.request.method" }
+                - { action: rename, source_key: "http.response.status_code",       destination_key: "renamed.http.response.status_code" }
+                - { action: rename, source_key: "http.route",                      destination_key: "renamed.http.route" }
+                - { action: rename, source_key: "url.full",                        destination_key: "renamed.url.full" }
+                - { action: rename, source_key: "url.path",                        destination_key: "renamed.url.path" }
+                - { action: rename, source_key: "url.scheme",                      destination_key: "renamed.url.scheme" }
+                - { action: rename, source_key: "server.address",                  destination_key: "renamed.server.address" }
+                - { action: rename, source_key: "server.port",                     destination_key: "renamed.server.port" }
+                - { action: rename, source_key: "client.address",                  destination_key: "renamed.client.address" }
+                - { action: rename, source_key: "client.port",                     destination_key: "renamed.client.port" }
+                - { action: rename, source_key: "network.protocol.name",           destination_key: "renamed.network.protocol.name" }
+                - { action: rename, source_key: "network.protocol.version",        destination_key: "renamed.network.protocol.version" }
+                - { action: rename, source_key: "network.transport",               destination_key: "renamed.network.transport" }
+                - { action: rename, source_key: "db.system",                       destination_key: "renamed.db.system" }
+                - { action: rename, source_key: "db.namespace",                    destination_key: "renamed.db.namespace" }
+                - { action: rename, source_key: "db.operation.name",               destination_key: "renamed.db.operation.name" }
+                - { action: rename, source_key: "db.query.text",                   destination_key: "renamed.db.query.text" }
+                - { action: rename, source_key: "db.collection.name",              destination_key: "renamed.db.collection.name" }
+                - { action: rename, source_key: "messaging.system",                destination_key: "renamed.messaging.system" }
+                - { action: rename, source_key: "messaging.operation.type",        destination_key: "renamed.messaging.operation.type" }
+                - { action: rename, source_key: "messaging.destination.name",      destination_key: "renamed.messaging.destination.name" }
+                - { action: rename, source_key: "messaging.message.id",            destination_key: "renamed.messaging.message.id" }
+                - { action: rename, source_key: "rpc.system",                      destination_key: "renamed.rpc.system" }
+                - { action: rename, source_key: "rpc.service",                     destination_key: "renamed.rpc.service" }
+                - { action: rename, source_key: "rpc.method",                      destination_key: "renamed.rpc.method" }
+                - { action: rename, source_key: "enduser.id",                      destination_key: "renamed.enduser.id" }
+                - { action: rename, source_key: "enduser.role",                    destination_key: "renamed.enduser.role" }
+                - { action: rename, source_key: "enduser.scope",                   destination_key: "renamed.enduser.scope" }
+                - { action: rename, source_key: "cloud.provider",                  destination_key: "renamed.cloud.provider" }
+                - { action: rename, source_key: "cloud.region",                    destination_key: "renamed.cloud.region" }
+                - { action: rename, source_key: "cloud.availability_zone",         destination_key: "renamed.cloud.availability_zone" }
+                - { action: rename, source_key: "cloud.account.id",                destination_key: "renamed.cloud.account.id" }
+                - { action: rename, source_key: "container.id",                    destination_key: "renamed.container.id" }
+                - { action: rename, source_key: "container.name",                  destination_key: "renamed.container.name" }
+                - { action: rename, source_key: "container.image.name",            destination_key: "renamed.container.image.name" }
+
+          # Geneva exporter (same config as fakegen-geneva.yaml).
+          geneva-exporter:
+            type: "urn:microsoft:exporter:geneva"
+            config:
+              endpoint: "https://gcs.ppe.monitoring.core.windows.net"
+              environment: "Test"
+              account: "PipelineAgent2Demo"
+              namespace: "PAdemo2"
+              region: "eastus"
+              config_major_version: 2
+              tenant: "PAdemo2-tenant"
+              role_name: "otlp-collector"
+              role_instance: "collector-001"
+
+              auth:
+                type: "certificate"
+                path: "C:/Users/utpilla/Downloads/client.p12"
+                password: "password"
+
+              max_buffer_size: 1000
+              max_concurrent_uploads: 4
+
+        connections:
+          - from: fake-data-generator
+            to: rename-attrs
+          - from: rename-attrs
+            to: geneva-exporter

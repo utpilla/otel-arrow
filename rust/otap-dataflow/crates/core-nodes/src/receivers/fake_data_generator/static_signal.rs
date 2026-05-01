@@ -582,7 +582,7 @@ pub fn static_otlp_logs(
     signal_count: usize,
     extra_attrs: Option<&HashMap<String, String>>,
 ) -> LogsData {
-    static_otlp_logs_with_config(signal_count, None, None, false, extra_attrs)
+    static_otlp_logs_with_config(signal_count, None, None, false, None, extra_attrs)
 }
 
 /// Generates LogsData with configurable body size, attribute count, and
@@ -592,6 +592,8 @@ pub fn static_otlp_logs(
 ///   When `None`, uses the default body ("Order processed successfully").
 /// - `num_log_attributes`: When `Some(n)`, generates `n` key-value string attributes.
 ///   When `None`, uses the default 2 attributes (thread.id, thread.name).
+/// - `log_event_name`: When `Some(s)`, sets `LogRecord.event_name` to `s` on every record.
+///   When `None`, leaves `event_name` empty (the OTLP default).
 /// - `extra_attrs`: Optional extra key-value pairs merged into the resource attributes.
 #[must_use]
 pub fn static_otlp_logs_with_config(
@@ -599,6 +601,7 @@ pub fn static_otlp_logs_with_config(
     log_body_size_bytes: Option<usize>,
     num_log_attributes: Option<usize>,
     use_trace_context: bool,
+    log_event_name: Option<&str>,
     extra_attrs: Option<&HashMap<String, String>>,
 ) -> LogsData {
     let logs = static_logs(
@@ -606,6 +609,7 @@ pub fn static_otlp_logs_with_config(
         log_body_size_bytes,
         num_log_attributes,
         use_trace_context,
+        log_event_name,
     );
 
     let scopes = vec![ScopeLogs::new(
@@ -1062,6 +1066,7 @@ fn static_logs(
     log_body_size_bytes: Option<usize>,
     num_log_attributes: Option<usize>,
     use_trace_context: bool,
+    log_event_name: Option<&str>,
 ) -> Vec<LogRecord> {
     let body_pool = build_body_pool(log_body_size_bytes);
 
@@ -1083,6 +1088,10 @@ fn static_logs(
                 .severity_number(severity_number)
                 .severity_text(severity_text)
                 .attributes(attributes);
+
+            if let Some(name) = log_event_name {
+                builder = builder.event_name(name);
+            }
 
             if use_trace_context {
                 builder = builder.trace_id(gen_trace_id()).span_id(gen_span_id());
@@ -1246,7 +1255,7 @@ mod tests {
 
     #[test]
     fn test_static_logs_with_custom_body_size() {
-        let logs = static_otlp_logs_with_config(5, Some(1024), None, false, None);
+        let logs = static_otlp_logs_with_config(5, Some(1024), None, false, None, None);
         let records = &logs.resource_logs[0].scope_logs[0].log_records;
         assert_eq!(records.len(), 5);
         if let Some(body) = &records[0].body {
@@ -1265,7 +1274,7 @@ mod tests {
 
     #[test]
     fn test_static_logs_with_custom_attributes() {
-        let logs = static_otlp_logs_with_config(3, None, Some(5), false, None);
+        let logs = static_otlp_logs_with_config(3, None, Some(5), false, None, None);
         let records = &logs.resource_logs[0].scope_logs[0].log_records;
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].attributes.len(), 5);
@@ -1283,7 +1292,7 @@ mod tests {
 
     #[test]
     fn test_static_logs_with_both_custom() {
-        let logs = static_otlp_logs_with_config(2, Some(512), Some(10), false, None);
+        let logs = static_otlp_logs_with_config(2, Some(512), Some(10), false, None, None);
         let records = &logs.resource_logs[0].scope_logs[0].log_records;
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].attributes.len(), 10);
@@ -1291,7 +1300,7 @@ mod tests {
 
     #[test]
     fn test_static_logs_zero_body_size() {
-        let logs = static_otlp_logs_with_config(1, Some(0), None, false, None);
+        let logs = static_otlp_logs_with_config(1, Some(0), None, false, None, None);
         let records = &logs.resource_logs[0].scope_logs[0].log_records;
         assert!(
             records[0].body.is_none(),
@@ -1301,7 +1310,7 @@ mod tests {
 
     #[test]
     fn test_static_logs_zero_attributes() {
-        let logs = static_otlp_logs_with_config(1, None, Some(0), false, None);
+        let logs = static_otlp_logs_with_config(1, None, Some(0), false, None, None);
         let records = &logs.resource_logs[0].scope_logs[0].log_records;
         assert!(records[0].attributes.is_empty());
     }
@@ -1326,7 +1335,7 @@ mod tests {
     fn test_compression_ratio_is_realistic() {
         use prost::Message;
 
-        let logs = static_otlp_logs_with_config(500, Some(1024), Some(6), true, None);
+        let logs = static_otlp_logs_with_config(500, Some(1024), Some(6), true, None, None);
         let raw = logs.encode_to_vec();
         let raw_size = raw.len();
 

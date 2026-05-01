@@ -37,6 +37,7 @@ otap-df-core-nodes.workspace = true
 otap-df-engine.workspace = true
 otap-df-otap.workspace = true
 clap.workspace = true
+cpu-time.workspace = true
 mimalloc = { workspace = true, optional = true }
 dhat = { workspace = true, optional = true }
 cfg-if.workspace = true

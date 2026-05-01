@@ -1,0 +1,96 @@
+# Geneva Exporter with Built-in Traffic Generator (Logs)
+#
+# This configuration runs the built-in fake-data traffic generator producing
+# log signals only and forwards them to the Microsoft Geneva backend.
+#
+# Build (Windows requires OpenSSL env vars; see below):
+#   $env:OPENSSL_LIB_DIR     = "C:\Program Files\OpenSSL-Win64\lib\VC\x64\MD"
+#   $env:OPENSSL_INCLUDE_DIR = "C:\Program Files\OpenSSL-Win64\include"
+#   $env:OPENSSL_NO_VENDOR   = "1"
+#   cargo build --release --features geneva-exporter
+#
+# Run:
+#   .\target\release\df_engine.exe `
+#     --config crates/contrib-nodes/src/exporters/geneva_exporter/fakegen-geneva.yaml `
+#     --num-cores 1
+#
+# Geneva config (matches the requested values):
+#   GENEVA_ENDPOINT="https://gcs.ppe.monitoring.core.windows.net"
+#   GENEVA_ENVIRONMENT="Test"
+#   GENEVA_ACCOUNT="PipelineAgent2Demo"
+#   GENEVA_NAMESPACE="PAdemo2"
+#   GENEVA_REGION="eastus"
+#   GENEVA_CERT_PATH="C:\Users\utpilla\Downloads\client.p12"
+#   GENEVA_CERT_PASSWORD="password"
+#   GENEVA_CONFIG_MAJOR_VERSION=2
+
+version: otel_dataflow/v1
+
+policies:
+  channel_capacity:
+    control:
+      node: 100
+      pipeline: 100
+    pdata: 128
+
+engine:
+  telemetry:
+    logs:
+      level: "info,otap-df-contrib-nodes=info"
+
+groups:
+  default:
+    pipelines:
+      main:
+        nodes:
+          # Built-in fake data generator producing logs only
+          fake-data-generator:
+            type: "urn:otel:receiver:traffic_generator"
+            config:
+              data_source: static
+              generation_strategy: pre_generated
+              traffic_config:
+                # Cap throughput so the A/B comparison has identical denominators
+                # on both sides. 1000 records/sec sits above the steady-state
+                # network ceiling we observed (~1k/sec to Geneva PPE), so both
+                # runs effectively become network-bound at the same rate.
+                signals_per_second: 1000
+                max_batch_size: 100
+                max_signal_count: null
+                # 50 attributes per log record. The traffic generator pulls
+                # attribute names in order from a built-in semantic-conventions
+                # pool — see docs/fakegen-log-columns.md for the full list of
+                # which 50 names you actually get with this setting.
+                num_log_attributes: 50
+                # Tag every record with a fixed event_name so it's easy to
+                # distinguish the baseline run from the transform A/B run.
+                log_event_name: "Test1"
+                metric_weight: 0
+                trace_weight: 0
+                log_weight: 1
+
+          # Geneva exporter
+          geneva-exporter:
+            type: "urn:microsoft:exporter:geneva"
+            config:
+              endpoint: "https://gcs.ppe.monitoring.core.windows.net"
+              environment: "Test"
+              account: "PipelineAgent2Demo"
+              namespace: "PAdemo2"
+              region: "eastus"
+              config_major_version: 2
+              tenant: "PAdemo2-tenant"
+              role_name: "otlp-collector"
+              role_instance: "collector-001"
+
+              auth:
+                type: "certificate"
+                path: "C:/Users/utpilla/Downloads/client.p12"
+                password: "password"
+
+              max_buffer_size: 1000
+              max_concurrent_uploads: 4
+
+        connections:
+          - from: fake-data-generator
+            to: geneva-exporter

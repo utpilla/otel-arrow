@@ -64,6 +64,7 @@ impl TrafficProducer {
                     log_body_size_bytes: traffic_config.log_body_size_bytes(),
                     num_log_attributes: traffic_config.num_log_attributes(),
                     use_trace_context: traffic_config.use_trace_context(),
+                    log_event_name: traffic_config.log_event_name().map(str::to_string),
                     num_metric_attributes: traffic_config.num_metric_attributes(),
                     num_data_points_per_metric: traffic_config.num_data_points_per_metric(),
                 })
@@ -477,6 +478,8 @@ pub struct StaticGenerator {
     num_log_attributes: Option<usize>,
     /// Whether to populate trace_id/span_id on log records
     use_trace_context: bool,
+    /// Fixed `event_name` to set on every log record (None = leave empty)
+    log_event_name: Option<String>,
     /// Number of metric attributes per data point (None = default attributes)
     num_metric_attributes: Option<usize>,
     /// Number of data points per metric (None = default)
@@ -508,6 +511,7 @@ impl SignalGenerator for StaticGenerator {
             self.log_body_size_bytes,
             self.num_log_attributes,
             self.use_trace_context,
+            self.log_event_name.as_deref(),
             attrs,
         );
         let payload = OtlpProtoMessage::Logs(payload);
@@ -554,6 +558,7 @@ mod tests {
             log_body_size_bytes: None,
             num_log_attributes: None,
             use_trace_context: false,
+            log_event_name: None,
             num_metric_attributes: None,
             num_data_points_per_metric: None,
         }
@@ -733,6 +738,7 @@ mod tests {
             log_body_size_bytes: None,
             num_log_attributes: None,
             use_trace_context: false,
+            log_event_name: None,
             num_metric_attributes: None,
             num_data_points_per_metric: None,
         };
