@@ -281,6 +281,7 @@
   const enginePipelineCountEl = document.getElementById("engine-pipeline-count");
   const engineCoreCountEl = document.getElementById("engine-core-count");
   const engineUptimeEl = document.getElementById("engine-uptime");
+  const engineGenevaEpsEl = document.getElementById("engine-geneva-eps");
 
   const pipeCpuUtilEl = document.getElementById("pipe-cpu-util");
   const pipeCpuCoresEl = document.getElementById("pipe-cpu-cores");
@@ -367,6 +368,12 @@
   let selectedPipelineKey = null;
   let selectedCoreId = null;
   let lastMetricSets = [];
+  // Geneva exporter throughput tracking: timestamp of the previous tile
+  // update. Combined with each poll's per-core delta of the
+  // `log.records.uploaded` counter to derive a per-second rate for the
+  // "Geneva exports/sec" tile. (Counters arrive already pre-deltaed by
+  // polling-controller.js for delta-temporality metrics.)
+  let lastGenevaSampleMs = null;
   let interPipelineTopology = createEmptyInterPipelineTopology();
   // Derived inter-pipeline state for the currently selected pipeline (future side-panel usage).
   let selectedPipelineInterconnect = null;
@@ -2457,6 +2464,51 @@
     }
   }
 
+  // Updates the "Geneva exports/sec" tile by summing the per-poll delta of
+  // the `log.records.uploaded` counter across every per-core series in the
+  // `otap.exporter.geneva` set, then dividing by the wall-clock seconds
+  // since the previous tile update.
+  //
+  // Note: by the time a metric reaches `lastMetricSets`, the polling
+  // controller's `deriveClientDeltas` has already turned cumulative `delta`
+  // temporality counters into per-poll deltas — so the value we read is
+  // already a delta, not a cumulative total.
+  function updateGenevaEpsCard(ts) {
+    if (!engineGenevaEpsEl) return;
+    let deltaSum = 0;
+    let foundAnySeries = false;
+    for (const set of lastMetricSets) {
+      if (!set || set.name !== "otap.exporter.geneva") continue;
+      for (const metric of set.metrics || []) {
+        // The JSON metric stream uses OTel dot-style names (e.g.
+        // "log.records.uploaded"); the Prometheus exporter rewrites these
+        // with underscores at output time.
+        if (metric.name !== "log.records.uploaded") continue;
+        if (typeof metric.value !== "number" || !Number.isFinite(metric.value)) continue;
+        deltaSum += metric.value;
+        foundAnySeries = true;
+      }
+    }
+    if (!foundAnySeries) {
+      // Geneva exporter not present in this pipeline, or no data yet.
+      lastGenevaSampleMs = null;
+      engineGenevaEpsEl.textContent = "n/a";
+      return;
+    }
+    const sampleMs = ts instanceof Date ? ts.getTime() : Date.now();
+    if (lastGenevaSampleMs != null) {
+      const dt = (sampleMs - lastGenevaSampleMs) / 1000;
+      if (dt > 0) {
+        const rate = deltaSum / dt;
+        engineGenevaEpsEl.textContent = `${rate.toFixed(0)}/s`;
+      }
+    } else {
+      // First sample: nothing to time-rate against yet.
+      engineGenevaEpsEl.textContent = "…";
+    }
+    lastGenevaSampleMs = sampleMs;
+  }
+
   function updateEngineCards(summary, ts) {
     const values = deriveEngineCardValues(
       summary,
@@ -2478,6 +2530,8 @@
     engineMemoryRssEl.textContent =
       values.memoryRssMiB == null ? "n/a" : `${values.memoryRssMiB.toFixed(1)} MiB`;
     engineUptimeEl.textContent = formatDurationSeconds(values.uptimeSeconds);
+
+    updateGenevaEpsCard(ts);
 
     const timestamp = ts || lastSampleTs;
     if (Number.isFinite(values.coreCount)) {

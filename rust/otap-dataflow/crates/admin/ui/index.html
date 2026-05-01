@@ -111,7 +111,7 @@
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <h2 class="text-lg font-semibold tracking-tight">Engine Metrics</h2>
     </div>
-    <div class="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+    <div class="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-7">
       <div id="card-engine-cpu" class="card rounded-2xl px-3 py-2 shadow-lg">
         <div class="text-xs uppercase tracking-wide text-slate-400 mb-1">
           CPU
@@ -159,11 +159,21 @@
         </div>
         <div id="engine-uptime" class="text-2xl font-semibold">n/a</div>
       </div>
+
+      <div id="card-engine-geneva-eps" class="card rounded-2xl px-3 py-2 shadow-lg">
+        <div class="text-xs uppercase tracking-wide text-slate-400 mb-1">
+          Geneva exports/sec
+        </div>
+        <div id="engine-geneva-eps" class="text-2xl font-semibold">n/a</div>
+      </div>
     </div>
   </section>
 
-  <section class="card rounded-2xl p-4 shadow-lg">
-    <!-- Pipeline-focused cards; selectors scope all downstream topology/detail views. -->
+  <section class="card rounded-2xl p-4 shadow-lg" hidden>
+    <!-- Pipeline-focused cards; selectors scope all downstream topology/detail views.
+         Hidden because the headline cards (Engine Metrics + Geneva exports/sec) are
+         enough for the current A/B-comparison demo. The DOM is kept so existing
+         JS that queries these element IDs continues to work without errors. -->
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div class="flex flex-wrap items-center gap-3">
         <h2 class="text-lg font-semibold tracking-tight">Pipeline Engine Metrics</h2>

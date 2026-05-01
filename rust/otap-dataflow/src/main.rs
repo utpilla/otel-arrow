@@ -200,6 +200,13 @@ struct Args {
     /// `cpu_time per record` between configs. Windows-only; ignored elsewhere.
     #[arg(long, value_name = "SECS")]
     run_duration_secs: Option<u64>,
+
+    /// Override the `process_instance_id` metric label with a fixed string
+    /// (e.g. "baseline" or "transform"). When unset, the engine generates a
+    /// base32-encoded UUID v7. Useful for A/B comparison runs so dashboards
+    /// can label series meaningfully instead of by random UUID.
+    #[arg(long, value_name = "LABEL")]
+    run_label: Option<String>,
 }
 
 fn parse_core_id_allocation(s: &str) -> Result<CoreAllocation, String> {
@@ -261,7 +268,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         validate_and_exit,
         license,
         run_duration_secs,
+        run_label,
     } = Args::parse();
+
+    // Propagate --run-label via env var so the engine's `process_instance_id`
+    // LazyLock picks it up. Must happen before any engine code reads the id.
+    // SAFETY: single-threaded prelude before anything else runs.
+    if let Some(label) = run_label.as_deref()
+        && !label.trim().is_empty()
+    {
+        // SAFETY: set_var is only unsafe due to FFI thread-safety concerns;
+        // we are still single-threaded here in main() before any engine
+        // threads start.
+        unsafe { std::env::set_var("DF_ENGINE_RUN_LABEL", label.trim()) };
+    }
 
     if license {
         println!("{LICENSE_TEXT}");

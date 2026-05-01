@@ -1,0 +1,68 @@
+version: "3.9"
+
+# Local Prometheus + Grafana stack for monitoring df_engine.
+#
+# Usage (run from this directory):
+#   docker compose -f monitoring/docker-compose.yml up -d
+#
+# Then open:
+#   - Grafana:    http://localhost:3000   (login: admin / admin, no password change required)
+#   - Prometheus: http://localhost:9090
+#
+# The "df_engine" dashboard is pre-provisioned and is the default landing
+# page in Grafana. It auto-refreshes every 5 seconds.
+#
+# Stop and remove:
+#   docker compose -f monitoring/docker-compose.yml down
+#
+# Notes:
+#   - Both containers reach df_engine via host.docker.internal:8080. This
+#     works on Docker Desktop for Windows and macOS out of the box.
+#   - df_engine itself runs as a normal native process on the host —
+#     do NOT run it inside Docker for this setup.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: df_engine_prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=24h"
+      - "--web.enable-lifecycle"
+    # `host-gateway` resolves to the Docker host's IP. Works on both Docker
+    # Desktop (Windows/macOS) and Docker Engine in WSL2/Linux \u2014 in either
+    # environment, `host.docker.internal:8080` will reach `df_engine.exe`
+    # running natively on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.5.0
+    container_name: df_engine_grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_USERS_DEFAULT_THEME: dark
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/df_engine.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  prometheus_data:
+  grafana_data:

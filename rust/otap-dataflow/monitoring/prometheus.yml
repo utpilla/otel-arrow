@@ -1,0 +1,29 @@
+# Prometheus configuration for scraping df_engine metrics.
+#
+# df_engine exposes Prometheus text format at:
+#   http://127.0.0.1:8080/api/v1/telemetry/metrics?format=prometheus
+#
+# We scrape every 2 s so charts feel real-time during A/B comparison runs.
+
+global:
+  scrape_interval: 2s
+  evaluation_interval: 5s
+  external_labels:
+    monitor: df_engine_local
+
+scrape_configs:
+  - job_name: df_engine
+    metrics_path: /api/v1/telemetry/metrics
+    params:
+      format: [prometheus]
+    static_configs:
+      # The target address depends on the Docker setup:
+      #   - Docker Desktop (Windows/macOS): use "host.docker.internal:8080"
+      #   - Docker Engine in WSL2: use the WSL eth0 default-route gateway
+      #     (Windows host as seen from WSL). Find it with:
+      #         wsl -- bash -c "ip route | grep default | awk '{print \$3}'"
+      #     (On this machine that's 172.17.144.1; it usually changes
+      #     between Windows reboots.)
+      - targets: ["172.17.144.1:8080"]
+        labels:
+          instance: df_engine_local

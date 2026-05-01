@@ -26,14 +26,28 @@ use std::sync::Arc;
 /// (without index numbers) to their engine-specific pipeline indices.
 pub type NodeNameIndex = Arc<HashMap<ConfigNodeId, EngineNodeId>>;
 
-// Generate a stable, unique identifier per process instance (base32-encoded UUID v7)
-// Choose UUID v7 for better sortability in telemetry signals
+// Generate a stable, unique identifier per process instance.
+//
+// If the `DF_ENGINE_RUN_LABEL` environment variable is set and non-empty
+// (typically via the `--run-label` CLI flag in `main.rs`), it becomes the
+// process instance id verbatim. This makes A/B comparison runs trivially
+// distinguishable in metrics (e.g. `baseline`, `transform`) without
+// needing to remember which auto-generated UUID was which.
+//
+// Otherwise, fall back to a base32-encoded UUID v7 (chosen for sortability
+// in telemetry signals).
 use data_encoding::BASE32_NOPAD;
 use std::borrow::Cow;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
 static PROCESS_INSTANCE_ID: LazyLock<Cow<'static, str>> = LazyLock::new(|| {
+    if let Ok(label) = std::env::var("DF_ENGINE_RUN_LABEL") {
+        let trimmed = label.trim();
+        if !trimmed.is_empty() {
+            return Cow::Owned(trimmed.to_string());
+        }
+    }
     let uuid = Uuid::now_v7();
     let encoded = BASE32_NOPAD.encode(uuid.as_bytes());
     Cow::Owned(encoded)

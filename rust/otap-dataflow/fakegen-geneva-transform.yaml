@@ -31,7 +31,7 @@ policies:
     control:
       node: 100
       pipeline: 100
-    pdata: 128
+    pdata: 10
 
 engine:
   telemetry:
@@ -53,8 +53,8 @@ groups:
               traffic_config:
                 # Same cap as fakegen-geneva.yaml so the A/B comparison has
                 # identical denominators on both sides.
-                signals_per_second: 10000
-                max_batch_size: 1000
+                signals_per_second: 5000
+                max_batch_size: 5000
                 max_signal_count: null
                 num_log_attributes: 50
                 log_event_name: "Test2"

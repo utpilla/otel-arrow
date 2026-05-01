@@ -31,7 +31,7 @@ policies:
     control:
       node: 100
       pipeline: 100
-    pdata: 128
+    pdata: 10
 
 engine:
   telemetry:
@@ -54,8 +54,8 @@ groups:
                 # on both sides. 1000 records/sec sits above the steady-state
                 # network ceiling we observed (~1k/sec to Geneva PPE), so both
                 # runs effectively become network-bound at the same rate.
-                signals_per_second: 1000
-                max_batch_size: 100
+                signals_per_second: 5000
+                max_batch_size: 5000
                 max_signal_count: null
                 # 50 attributes per log record. The traffic generator pulls
                 # attribute names in order from a built-in semantic-conventions
