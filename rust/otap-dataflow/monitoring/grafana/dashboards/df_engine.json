@@ -37,7 +37,7 @@
     },
     {
       "type": "stat",
-      "title": "CPU (% of all cores)",
+      "title": "CPU (% of all cores, median)",
       "description": "Process-wide CPU as a fraction of all logical CPUs on the machine. From engine.metrics.cpu_utilization. One row per df_engine run (process_instance_id label, settable via --run-label).",
       "id": 11,
       "gridPos": { "x": 6, "y": 0, "w": 6, "h": 5 },
@@ -46,12 +46,11 @@
         {
           "expr": "cpu_utilization{set=\"engine.metrics\"} * 100",
           "legendFormat": "{{process_instance_id}}",
-          "refId": "A",
-          "instant": true
+          "refId": "A"
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "values": true, "limit": 10 },
+        "reduceOptions": { "calcs": ["median"] },
         "graphMode": "none",
         "colorMode": "value",
         "textMode": "value_and_name",
@@ -75,7 +74,7 @@
     },
     {
       "type": "stat",
-      "title": "Memory (RSS)",
+      "title": "Memory (RSS, median)",
       "description": "Resident Set Size of df_engine.exe. From engine.metrics.memory_rss. One row per df_engine run (process_instance_id label, settable via --run-label).",
       "id": 12,
       "gridPos": { "x": 12, "y": 0, "w": 6, "h": 5 },
@@ -84,12 +83,11 @@
         {
           "expr": "memory_rss{set=\"engine.metrics\"}",
           "legendFormat": "{{process_instance_id}}",
-          "refId": "A",
-          "instant": true
+          "refId": "A"
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "values": true, "limit": 10 },
+        "reduceOptions": { "calcs": ["median"] },
         "graphMode": "none",
         "colorMode": "value",
         "textMode": "value_and_name",
@@ -105,7 +103,7 @@
     },
     {
       "type": "stat",
-      "title": "Logs exported / sec",
+      "title": "Logs exported / sec (mean)",
       "description": "Per-second rate of LogRecords successfully uploaded to Geneva. One row per df_engine run (process_instance_id label, settable via --run-label).",
       "id": 13,
       "gridPos": { "x": 18, "y": 0, "w": 6, "h": 5 },
@@ -114,12 +112,11 @@
         {
           "expr": "sum by(process_instance_id)(rate(log_records_uploaded{set=\"otap.exporter.geneva\"}[30s]))",
           "legendFormat": "{{process_instance_id}}",
-          "refId": "A",
-          "instant": true
+          "refId": "A"
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "values": true, "limit": 10 },
+        "reduceOptions": { "calcs": ["mean"] },
         "graphMode": "none",
         "colorMode": "value",
         "textMode": "value_and_name",
